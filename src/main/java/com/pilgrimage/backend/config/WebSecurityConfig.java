@@ -43,7 +43,11 @@ public class WebSecurityConfig {
             .authorizeHttpRequests(auth -> 
                 auth.requestMatchers(
                         "/auth/login",
-                        "/auth/register"
+                        "/auth/register",
+                        "/auth/password/**",
+                        "/api/auth/login",
+                        "/api/auth/register",
+                        "/api/auth/password/**"
                     ).permitAll()
                    .anyRequest().authenticated()
             );

@@ -99,7 +99,8 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public User getCurrentUser(String email) {
-        return userRepository.findByEmail(email)
+        String normalizedEmail = email == null ? null : email.toLowerCase().trim();
+        return userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
     }
 
