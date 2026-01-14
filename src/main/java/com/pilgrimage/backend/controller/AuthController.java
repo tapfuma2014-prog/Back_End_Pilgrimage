@@ -41,7 +41,7 @@ public class AuthController {
             return ResponseEntity.ok(Collections.singletonMap("message", "User registered successfully"));
         } catch (Exception e) {
             System.err.println("Registration error: " + e.getMessage());
-            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("message", e.getMessage()));
         }
     }
 

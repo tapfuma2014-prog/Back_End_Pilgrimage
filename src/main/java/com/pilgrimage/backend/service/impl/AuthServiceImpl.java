@@ -40,6 +40,10 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public JwtResponse authenticateUser(LoginRequest loginRequest) {
         try {
+            if (loginRequest.getEmail() == null || loginRequest.getEmail().isBlank()
+                || loginRequest.getPassword() == null || loginRequest.getPassword().isBlank()) {
+                throw new RuntimeException("Email and password are required");
+            }
             // Authenticate the user with email and password
             Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
@@ -79,6 +83,11 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public User registerUser(RegisterRequest registerRequest) {
+        if (registerRequest.getFullName() == null || registerRequest.getFullName().isBlank()
+            || registerRequest.getEmail() == null || registerRequest.getEmail().isBlank()
+            || registerRequest.getPassword() == null || registerRequest.getPassword().isBlank()) {
+            throw new RuntimeException("Full name, email, and password are required");
+        }
         if (userRepository.existsByEmail(registerRequest.getEmail())) {
             throw new RuntimeException("Email is already in use");
         }

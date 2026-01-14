@@ -47,7 +47,21 @@ public class WebSecurityConfig {
                         "/auth/password/**",
                         "/api/auth/login",
                         "/api/auth/register",
-                        "/api/auth/password/**"
+                        "/api/auth/password/**",
+                        "/search/**",
+                        "/notifications/**",
+                        "/cart/**",
+                        "/artworks/**",
+                        "/auctions/**",
+                        "/entities/**",
+                        "/integrations/**",
+                        "/api/search/**",
+                        "/api/notifications/**",
+                        "/api/cart/**",
+                        "/api/artworks/**",
+                        "/api/auctions/**",
+                        "/api/entities/**",
+                        "/api/integrations/**"
                     ).permitAll()
                    .anyRequest().authenticated()
             );
@@ -61,7 +75,11 @@ public class WebSecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Collections.singletonList("http://localhost:5173"));
+        configuration.setAllowedOrigins(Arrays.asList(
+            "http://localhost:5173",
+            "http://53coxroadpilgrimage.com",
+            "https://53coxroadpilgrimage.com"
+        ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Collections.singletonList("*"));
         configuration.setAllowCredentials(true);

@@ -3,6 +3,7 @@ package com.pilgrimage.backend.config;
 import com.pilgrimage.backend.service.JwtUserDetailsService;
 import com.pilgrimage.backend.security.JwtTokenUtil;
 import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -55,9 +56,9 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                 logger.error("Unable to get JWT Token");
             } catch (ExpiredJwtException e) {
                 logger.warn("JWT Token has expired");
+            } catch (JwtException e) {
+                logger.warn("JWT Token is invalid");
             }
-        } else {
-            logger.warn("JWT Token does not begin with Bearer String");
         }
 
         // Once we get the token validate it.
