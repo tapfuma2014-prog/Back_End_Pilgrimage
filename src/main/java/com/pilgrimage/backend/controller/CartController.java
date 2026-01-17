@@ -24,7 +24,7 @@ public class CartController {
         }
 
         Integer count = jdbcTemplate.queryForObject(
-            "SELECT COALESCE(SUM(quantity), 0) FROM cart WHERE created_by = ?",
+            "SELECT COALESCE(SUM(quantity), 0) FROM cart WHERE LOWER(created_by) = LOWER(?)",
             Integer.class,
             userEmail
         );

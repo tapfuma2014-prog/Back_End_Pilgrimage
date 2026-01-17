@@ -86,8 +86,13 @@ public class EntityController {
                     params.addValue(paramName, collection);
                 }
             } else {
-                clauses.add(column + " = :" + paramName);
-                params.addValue(paramName, value);
+                if (value instanceof String text && isCaseInsensitiveColumn(column)) {
+                    clauses.add("LOWER(" + column + ") = :" + paramName);
+                    params.addValue(paramName, text.toLowerCase());
+                } else {
+                    clauses.add(column + " = :" + paramName);
+                    params.addValue(paramName, value);
+                }
             }
         }
 
@@ -307,6 +312,16 @@ public class EntityController {
             );
             return new HashSet<>(columns);
         });
+    }
+
+    private boolean isCaseInsensitiveColumn(String column) {
+        if (column == null) {
+            return false;
+        }
+        String normalized = column.toLowerCase();
+        return normalized.equals("created_by")
+            || normalized.equals("user_email")
+            || normalized.endsWith("_email");
     }
 
     private Map<String, ColumnType> getTableColumnTypes(String table) {
