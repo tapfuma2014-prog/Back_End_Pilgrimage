@@ -8,6 +8,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
+import java.sql.Connection;
 import java.sql.ResultSetMetaData;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,6 +20,7 @@ public class EntityController {
     private final JdbcTemplate jdbcTemplate;
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
     private final Map<String, Set<String>> tableColumnsCache = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, ColumnType>> tableColumnTypesCache = new ConcurrentHashMap<>();
 
     public EntityController(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -133,14 +135,18 @@ public class EntityController {
             return Collections.emptyMap();
         }
 
-        String columns = String.join(", ", filtered.keySet());
-        String values = String.join(", ", filtered.keySet().stream().map(k -> ":" + k).toList());
-        String sql = "INSERT INTO " + table + " (" + columns + ") VALUES (" + values + ")";
+        List<String> columns = new ArrayList<>(filtered.keySet());
+        String values = String.join(", ", Collections.nCopies(columns.size(), "?"));
+        String sql = "INSERT INTO " + table + " (" + String.join(", ", columns) + ") VALUES (" + values + ")";
 
-        MapSqlParameterSource params = new MapSqlParameterSource(filtered);
-        namedJdbcTemplate.update(sql, params);
+        Map<String, ColumnType> columnTypes = getTableColumnTypes(table);
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement(sql);
+            bindValues(statement, connection, columns, filtered, columnTypes);
+            return statement;
+        });
 
-        return jdbcTemplate.queryForMap("SELECT * FROM " + table + " WHERE id = ?", filtered.get("id"));
+        return fetchById(table, filtered.get("id"));
     }
 
     @PutMapping("/{entity}/{id}")
@@ -159,22 +165,22 @@ public class EntityController {
         filtered.remove("id");
 
         if (filtered.isEmpty()) {
-            return jdbcTemplate.queryForMap("SELECT * FROM " + table + " WHERE id = ?", id);
+            return fetchById(table, id);
         }
 
-        StringBuilder setClause = new StringBuilder();
-        List<String> assignments = new ArrayList<>();
-        for (String key : filtered.keySet()) {
-            assignments.add(key + " = :" + key);
-        }
-        setClause.append(String.join(", ", assignments));
+        List<String> columns = new ArrayList<>(filtered.keySet());
+        String assignments = String.join(", ", columns.stream().map(key -> key + " = ?").toList());
+        String sql = "UPDATE " + table + " SET " + assignments + " WHERE id = ?";
 
-        String sql = "UPDATE " + table + " SET " + setClause + " WHERE id = :id";
-        MapSqlParameterSource params = new MapSqlParameterSource(filtered);
-        params.addValue("id", id);
-        namedJdbcTemplate.update(sql, params);
+        Map<String, ColumnType> columnTypes = getTableColumnTypes(table);
+        jdbcTemplate.update(connection -> {
+            var statement = connection.prepareStatement(sql);
+            bindValues(statement, connection, columns, filtered, columnTypes);
+            statement.setObject(columns.size() + 1, id);
+            return statement;
+        });
 
-        return jdbcTemplate.queryForMap("SELECT * FROM " + table + " WHERE id = ?", id);
+        return fetchById(table, id);
     }
 
     @DeleteMapping("/{entity}/{id}")
@@ -203,6 +209,18 @@ public class EntityController {
             row.put(column, value);
         }
         return row;
+    }
+
+    private Map<String, Object> fetchById(String table, Object id) {
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+            "SELECT * FROM " + table + " WHERE id = ?",
+            (rs, rowNum) -> mapRow(rs),
+            id
+        );
+        if (rows.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return rows.get(0);
     }
 
     private Map<String, Object> filterAllowedColumns(Map<String, Object> payload, Set<String> allowedColumns) {
@@ -289,6 +307,82 @@ public class EntityController {
             );
             return new HashSet<>(columns);
         });
+    }
+
+    private Map<String, ColumnType> getTableColumnTypes(String table) {
+        return tableColumnTypesCache.computeIfAbsent(table, key -> {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT column_name, data_type, udt_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?",
+                key
+            );
+            Map<String, ColumnType> types = new HashMap<>();
+            for (Map<String, Object> row : rows) {
+                String column = Objects.toString(row.get("column_name"), "");
+                String dataType = Objects.toString(row.get("data_type"), "");
+                String udtName = Objects.toString(row.get("udt_name"), "");
+                types.put(column, new ColumnType(dataType, udtName));
+            }
+            return types;
+        });
+    }
+
+    private void bindValues(
+        java.sql.PreparedStatement statement,
+        Connection connection,
+        List<String> columns,
+        Map<String, Object> values,
+        Map<String, ColumnType> columnTypes
+    ) throws java.sql.SQLException {
+        for (int i = 0; i < columns.size(); i++) {
+            String column = columns.get(i);
+            Object value = values.get(column);
+            ColumnType columnType = columnTypes.get(column);
+            if (value instanceof Collection<?> collection) {
+                Object boundValue = coerceCollectionValue(connection, columnType, collection);
+                statement.setObject(i + 1, boundValue);
+            } else {
+                statement.setObject(i + 1, value);
+            }
+        }
+    }
+
+    private Object coerceCollectionValue(
+        Connection connection,
+        ColumnType columnType,
+        Collection<?> collection
+    ) throws java.sql.SQLException {
+        if (collection == null) {
+            return null;
+        }
+        if (columnType != null && "ARRAY".equalsIgnoreCase(columnType.dataType)) {
+            String elementType = columnType.elementType();
+            Object[] elements = collection.toArray();
+            return connection.createArrayOf(elementType, elements);
+        }
+        if (collection.isEmpty()) {
+            return null;
+        }
+        return String.join(", ", collection.stream().map(String::valueOf).toList());
+    }
+
+    private static final class ColumnType {
+        private final String dataType;
+        private final String udtName;
+
+        private ColumnType(String dataType, String udtName) {
+            this.dataType = dataType;
+            this.udtName = udtName;
+        }
+
+        private String elementType() {
+            if (udtName == null || udtName.isBlank()) {
+                return "text";
+            }
+            if (udtName.startsWith("_") && udtName.length() > 1) {
+                return udtName.substring(1);
+            }
+            return udtName;
+        }
     }
 
     private String toSnakeCase(String input) {
