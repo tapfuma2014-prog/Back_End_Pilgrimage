@@ -3,6 +3,8 @@ package com.pilgrimage.backend.controller;
 import com.pilgrimage.backend.service.FileExtractionService;
 import com.pilgrimage.backend.service.FileStorageService;
 import com.pilgrimage.backend.service.ImageGenerationService;
+import com.pilgrimage.backend.service.ImageProxyResponse;
+import com.pilgrimage.backend.service.ImageRequestParams;
 import com.pilgrimage.backend.service.LlmService;
 import com.pilgrimage.backend.service.NotificationDispatchService;
 import org.springframework.core.io.Resource;
@@ -12,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -21,6 +24,7 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -89,7 +93,38 @@ public class IntegrationController {
 
     @PostMapping("/generate-image")
     public Map<String, Object> generateImage(@RequestBody Map<String, Object> payload) {
-        return imageGenerationService.generateImage(payload);
+        Map<String, Object> response = imageGenerationService.generateImage(payload);
+        ImageRequestParams requestParams = imageGenerationService.buildRequestParams(payload);
+        if (!requestParams.prompt().isEmpty()) {
+            String previewUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/integrations/generate-image/preview")
+                .queryParam("prompt", requestParams.prompt())
+                .queryParam("model", requestParams.model())
+                .queryParamIfPresent("width", java.util.Optional.ofNullable(requestParams.width()))
+                .queryParamIfPresent("height", java.util.Optional.ofNullable(requestParams.height()))
+                .toUriString();
+            response.put("url", previewUrl);
+            response.put("image_url", previewUrl);
+            response.put("preview_url", previewUrl);
+        }
+        return response;
+    }
+
+    @GetMapping("/generate-image/preview")
+    public ResponseEntity<byte[]> previewGeneratedImage(@RequestParam Map<String, String> params) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("prompt", params.get("prompt"));
+        payload.put("model", params.get("model"));
+        payload.put("width", params.get("width"));
+        payload.put("height", params.get("height"));
+
+        ImageProxyResponse proxyResponse = imageGenerationService.fetchImage(payload);
+        MediaType contentType = proxyResponse.getContentType() != null
+            ? MediaType.parseMediaType(proxyResponse.getContentType())
+            : MediaType.APPLICATION_OCTET_STREAM;
+        return ResponseEntity.status(proxyResponse.getStatusCode())
+            .contentType(contentType)
+            .body(proxyResponse.getBody());
     }
 
     @PostMapping("/extract")
