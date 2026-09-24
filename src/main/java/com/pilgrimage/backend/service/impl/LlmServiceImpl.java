@@ -45,6 +45,9 @@ public class LlmServiceImpl implements LlmService {
             if (normalizedKey.contains("id")) {
                 return extractIds(prompt, 4);
             }
+            if (normalizedKey.contains("highlight")) {
+                return List.of("Beautiful scenery", "Rich history", "Artistic significance");
+            }
             return Collections.emptyList();
         }
         if ("boolean".equalsIgnoreCase(type)) {
@@ -61,6 +64,21 @@ public class LlmServiceImpl implements LlmService {
         }
         if ("reasoning".equalsIgnoreCase(key)) {
             return "Selected based on the prompt and available data.";
+        }
+        if ("script".equalsIgnoreCase(key)) {
+            return "Welcome to this beautiful location. Take a moment to observe the surroundings and appreciate the art and nature around you. This space has been carefully curated to provide a peaceful and inspiring experience.";
+        }
+        if ("title".equalsIgnoreCase(key)) {
+            return "Audio Guide";
+        }
+        if ("duration".equalsIgnoreCase(key)) {
+            return "2 minutes";
+        }
+        if ("insight".equalsIgnoreCase(key)) {
+            return "The interplay between art and nature here creates a unique space for contemplation and discovery.";
+        }
+        if ("invitation".equalsIgnoreCase(key)) {
+            return "Take a deep breath and let yourself be present in this moment.";
         }
         return "Generated content for " + key.replace('_', ' ') + ".";
     }

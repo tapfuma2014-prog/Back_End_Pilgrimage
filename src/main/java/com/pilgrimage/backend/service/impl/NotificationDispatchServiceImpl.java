@@ -1,19 +1,29 @@
 package com.pilgrimage.backend.service.impl;
 
+import com.pilgrimage.backend.dto.CreateNotificationRequest;
+import com.pilgrimage.backend.service.EmailService;
 import com.pilgrimage.backend.service.NotificationDispatchService;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.pilgrimage.backend.service.NotificationService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 @Service
 public class NotificationDispatchServiceImpl implements NotificationDispatchService {
-    private final JdbcTemplate jdbcTemplate;
+    private static final Logger log = LoggerFactory.getLogger(NotificationDispatchServiceImpl.class);
 
-    public NotificationDispatchServiceImpl(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    private final NotificationService notificationService;
+    private final EmailService emailService;
+
+    public NotificationDispatchServiceImpl(
+        NotificationService notificationService,
+        EmailService emailService
+    ) {
+        this.notificationService = notificationService;
+        this.emailService = emailService;
     }
 
     @Override
@@ -32,8 +42,25 @@ public class NotificationDispatchServiceImpl implements NotificationDispatchServ
             return response;
         }
 
-        insertNotification(recipient, "email", subject, body);
-        response.put("status", "sent");
+        try {
+            emailService.sendPlainEmail(recipient, subject, body);
+            response.put("status", "sent");
+            response.put("delivery", "smtp");
+        } catch (RuntimeException ex) {
+            log.warn("SMTP email failed for {}: {}", recipient, ex.getMessage());
+            response.put("status", "failed");
+            response.put("message", ex.getMessage());
+            return response;
+        }
+
+        CreateNotificationRequest request = new CreateNotificationRequest();
+        request.setUserEmail(recipient);
+        request.setType("email");
+        request.setTitle(subject.isBlank() ? "Notification" : subject);
+        request.setMessage(body.isBlank() ? "No message body provided." : body);
+        request.setCreatedBy("system");
+        notificationService.create(request);
+
         response.put("recipient", recipient);
         return response;
     }
@@ -53,26 +80,17 @@ public class NotificationDispatchServiceImpl implements NotificationDispatchServ
             return response;
         }
 
-        insertNotification(recipient, "sms", "SMS Message", body);
+        CreateNotificationRequest request = new CreateNotificationRequest();
+        request.setUserEmail(recipient);
+        request.setType("sms");
+        request.setTitle("SMS Message");
+        request.setMessage(body.isBlank() ? "No message body provided." : body);
+        request.setCreatedBy("system");
+        notificationService.create(request);
+
         response.put("status", "queued");
         response.put("recipient", recipient);
         return response;
-    }
-
-    private void insertNotification(String recipient, String type, String title, String message) {
-        String id = UUID.randomUUID().toString();
-        String safeTitle = title.isBlank() ? "Notification" : title;
-        String safeMessage = message.isBlank() ? "No message body provided." : message;
-
-        jdbcTemplate.update(
-            "INSERT INTO notifications (id, user_email, type, title, message, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-            id,
-            recipient,
-            type,
-            safeTitle,
-            safeMessage,
-            "system"
-        );
     }
 
     private String getString(Map<String, Object> payload, String key) {

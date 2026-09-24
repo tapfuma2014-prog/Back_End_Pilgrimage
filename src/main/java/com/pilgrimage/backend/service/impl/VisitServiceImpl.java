@@ -1,7 +1,9 @@
 package com.pilgrimage.backend.service.impl;
 
 import com.pilgrimage.backend.dto.VisitPageDto;
+import com.pilgrimage.backend.repository.UserRepository;
 import com.pilgrimage.backend.service.VisitService;
+import com.pilgrimage.backend.util.EntityAuthorizationHelper;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -9,8 +11,25 @@ import java.util.List;
 @Service
 public class VisitServiceImpl implements VisitService {
 
+    private final UserRepository userRepository;
+
+    public VisitServiceImpl(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+
     @Override
     public List<VisitPageDto> getVisitPages() {
+        List<VisitPageDto> pages = allPages();
+        // Admin-only page names are never disclosed to non-admin callers.
+        if (!EntityAuthorizationHelper.isAdmin(userRepository)) {
+            pages = pages.stream()
+                .filter(p -> !"Admin".equals(p.getSection()))
+                .toList();
+        }
+        return pages;
+    }
+
+    private List<VisitPageDto> allPages() {
         return List.of(
             new VisitPageDto("Home", "Home", "Public Pages"),
             new VisitPageDto("Explore", "Explore", "Public Pages"),

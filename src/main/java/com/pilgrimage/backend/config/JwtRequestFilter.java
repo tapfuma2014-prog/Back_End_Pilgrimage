@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -44,6 +45,12 @@ public class JwtRequestFilter extends OncePerRequestFilter {
 
         final String requestTokenHeader = request.getHeader("Authorization");
 
+        if (logger.isDebugEnabled()) {
+            logger.debug("JWT filter: " + request.getMethod() + " " + request.getRequestURI() +
+                         " | Authorization present=" + (requestTokenHeader != null) +
+                         " | startsWith Bearer=" + (requestTokenHeader != null && requestTokenHeader.startsWith("Bearer ")));
+        }
+
         String username = null;
         String jwtToken = null;
 
@@ -57,13 +64,21 @@ public class JwtRequestFilter extends OncePerRequestFilter {
             } catch (ExpiredJwtException e) {
                 logger.warn("JWT Token has expired");
             } catch (JwtException e) {
-                logger.warn("JWT Token is invalid");
+                logger.warn("JWT Token is invalid: " + e.getMessage());
             }
         }
 
         // Once we get the token validate it.
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = this.jwtUserDetailsService.loadUserByUsername(username);
+            UserDetails userDetails;
+            try {
+                userDetails = this.jwtUserDetailsService.loadUserByUsername(username);
+            } catch (UsernameNotFoundException e) {
+                // Token subject no longer exists (e.g. deleted account) - treat as unauthenticated.
+                logger.warn("JWT subject not found: " + username);
+                chain.doFilter(request, response);
+                return;
+            }
 
             // if token is valid configure Spring Security to manually set authentication
             if (jwtTokenUtil.validateToken(jwtToken, userDetails)) {

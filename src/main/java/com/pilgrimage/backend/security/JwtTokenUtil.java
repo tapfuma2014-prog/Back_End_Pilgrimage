@@ -2,6 +2,7 @@ package com.pilgrimage.backend.security;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
@@ -21,17 +22,43 @@ public class JwtTokenUtil {
     @Value("${jwt.expiration}")
     private Long expiration;
     
-    public String generateToken(String username) {
-        Map<String, Object> claims = new HashMap<>();
-        return createToken(claims, username);
+    @Value("${jwt.refresh-expiration:604800000}")
+    private Long refreshExpiration;
+
+    private static final int MIN_SECRET_LENGTH = 32;
+
+    @PostConstruct
+    void validateSecretStrength() {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                "jwt.secret is not configured. Set the JWT_SECRET environment variable "
+                + "to a random value of at least " + MIN_SECRET_LENGTH + " characters.");
+        }
+        if (secret.length() < MIN_SECRET_LENGTH) {
+            throw new IllegalStateException(
+                "jwt.secret is too short (" + secret.length() + " chars). "
+                + "HS256 requires a secret of at least " + MIN_SECRET_LENGTH + " characters.");
+        }
     }
     
-    private String createToken(Map<String, Object> claims, String subject) {
+    public String generateToken(String username) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("type", "access");
+        return createToken(claims, username, expiration);
+    }
+    
+    public String generateRefreshToken(String username) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("type", "refresh");
+        return createToken(claims, username, refreshExpiration);
+    }
+    
+    private String createToken(Map<String, Object> claims, String subject, Long expirationMs) {
         return Jwts.builder()
                 .setClaims(claims)
                 .setSubject(subject)
                 .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + expiration * 1000))
+                .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(getSigningKey(), SignatureAlgorithm.HS256)
                 .compact();
     }
@@ -42,7 +69,19 @@ public class JwtTokenUtil {
     
     public Boolean validateToken(String token, UserDetails userDetails) {
         final String username = extractUsername(token);
+        // Refresh tokens must never be accepted as access tokens.
+        if (isRefreshToken(token)) {
+            return false;
+        }
         return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+
+    public boolean isRefreshToken(String token) {
+        try {
+            return "refresh".equals(extractClaim(token, claims -> claims.get("type", String.class)));
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
     }
     
     public String extractUsername(String token) {

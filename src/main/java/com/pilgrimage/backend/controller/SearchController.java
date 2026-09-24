@@ -33,7 +33,7 @@ public class SearchController {
         List<ArtworkSearchResult> artworks = jdbcTemplate.query(
             """
                 SELECT id, title, artist, image_url, art_style
-                FROM artworks
+                FROM artwork
                 WHERE LOWER(title) LIKE ?
                    OR LOWER(artist) LIKE ?
                    OR LOWER(art_style) LIKE ?
@@ -54,9 +54,9 @@ public class SearchController {
         List<ExhibitionSearchResult> exhibitions = jdbcTemplate.query(
             """
                 SELECT id, title, status, image_url
-                FROM exhibitions
+                FROM exhibition
                 WHERE LOWER(title) LIKE ?
-                   OR LOWER(COALESCE(array_to_string(featured_artists, ','), '')) LIKE ?
+                   OR LOWER(COALESCE(featured_artists::text, '')) LIKE ?
                    OR LOWER(COALESCE(description, '')) LIKE ?
                 ORDER BY created_date DESC
                 LIMIT 3
@@ -73,7 +73,7 @@ public class SearchController {
         List<AuctionSearchResult> auctions = jdbcTemplate.query(
             """
                 SELECT id, title, status
-                FROM auctions
+                FROM auction
                 WHERE LOWER(title) LIKE ?
                    OR LOWER(status) LIKE ?
                    OR LOWER(COALESCE(description, '')) LIKE ?

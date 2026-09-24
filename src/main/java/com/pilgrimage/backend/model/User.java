@@ -1,5 +1,6 @@
 package com.pilgrimage.backend.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import org.hibernate.annotations.GenericGenerator;
 import java.time.LocalDateTime;
@@ -19,6 +20,7 @@ public class User {
     private String email;
     
     @Column(nullable = false)
+    @JsonIgnore
     private String password;
     
     @Column(nullable = false)
@@ -29,6 +31,25 @@ public class User {
     
     @Column(name = "updated_date")
     private LocalDateTime updatedDate;
+
+    @Column(name = "reset_token")
+    @JsonIgnore
+    private String resetToken;
+
+    @Column(name = "reset_token_expiry")
+    @JsonIgnore
+    private LocalDateTime resetTokenExpiry;
+
+    @Column(name = "email_verified")
+    private Boolean emailVerified = false;
+
+    @Column(name = "verification_token")
+    @JsonIgnore
+    private String verificationToken;
+
+    @Column(name = "verification_token_expiry")
+    @JsonIgnore
+    private LocalDateTime verificationTokenExpiry;
     
     @PrePersist
     protected void onCreate() {
@@ -88,5 +109,45 @@ public class User {
     
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getResetToken() {
+        return resetToken;
+    }
+
+    public void setResetToken(String resetToken) {
+        this.resetToken = resetToken;
+    }
+
+    public LocalDateTime getResetTokenExpiry() {
+        return resetTokenExpiry;
+    }
+
+    public void setResetTokenExpiry(LocalDateTime resetTokenExpiry) {
+        this.resetTokenExpiry = resetTokenExpiry;
+    }
+
+    public Boolean getEmailVerified() {
+        return emailVerified;
+    }
+
+    public void setEmailVerified(Boolean emailVerified) {
+        this.emailVerified = emailVerified;
+    }
+
+    public String getVerificationToken() {
+        return verificationToken;
+    }
+
+    public void setVerificationToken(String verificationToken) {
+        this.verificationToken = verificationToken;
+    }
+
+    public LocalDateTime getVerificationTokenExpiry() {
+        return verificationTokenExpiry;
+    }
+
+    public void setVerificationTokenExpiry(LocalDateTime verificationTokenExpiry) {
+        this.verificationTokenExpiry = verificationTokenExpiry;
     }
 }

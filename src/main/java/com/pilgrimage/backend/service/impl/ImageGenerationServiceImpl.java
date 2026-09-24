@@ -3,6 +3,7 @@ package com.pilgrimage.backend.service.impl;
 import com.pilgrimage.backend.service.ImageGenerationService;
 import com.pilgrimage.backend.service.ImageProxyResponse;
 import com.pilgrimage.backend.service.ImageRequestParams;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -21,9 +22,14 @@ import java.util.Set;
 public class ImageGenerationServiceImpl implements ImageGenerationService {
     private static final String PROVIDER = "pollinations";
     private static final String BASE_URL = "https://gen.pollinations.ai/image/";
-    private static final String API_KEY = "sk_a7bIyIDcEBW95MyiMLObx2hPMFYt7Si6";
     private static final String DEFAULT_MODEL = "flux";
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+
+    private final String apiKey;
+
+    public ImageGenerationServiceImpl(@Value("${pollinations.api-key:}") String apiKey) {
+        this.apiKey = apiKey;
+    }
     private static final Set<String> SUPPORTED_MODELS = Set.of(
         "kontext",
         "turbo",
@@ -95,8 +101,8 @@ public class ImageGenerationServiceImpl implements ImageGenerationService {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(imageUrl))
             .header("Accept", "image/*")
             .GET();
-        if (API_KEY != null && !API_KEY.isBlank()) {
-            requestBuilder.header("Authorization", "Bearer " + API_KEY);
+        if (apiKey != null && !apiKey.isBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + apiKey);
         }
 
         try {
