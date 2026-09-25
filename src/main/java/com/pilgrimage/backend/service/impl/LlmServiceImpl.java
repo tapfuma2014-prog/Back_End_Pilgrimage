@@ -68,6 +68,18 @@ public class LlmServiceImpl implements LlmService {
         if ("script".equalsIgnoreCase(key)) {
             return "Welcome to this beautiful location. Take a moment to observe the surroundings and appreciate the art and nature around you. This space has been carefully curated to provide a peaceful and inspiring experience.";
         }
+        if ("narration".equalsIgnoreCase(key)) {
+            return "Take a moment to notice the colours, textures, and sounds around you as you move through this garden. Let the landscape guide your pace, and pause whenever a detail invites a closer look.";
+        }
+        if ("welcome".equalsIgnoreCase(key)) {
+            return "Welcome to this garden, where art, plants, and quiet paths come together for a sensory walk.";
+        }
+        if ("main_content".equalsIgnoreCase(key)) {
+            return "Notice the textures of the planting, the changing light, and the sounds carried along the paths. Take your time exploring the garden and look for the small details that make this place distinctive.";
+        }
+        if ("closing".equalsIgnoreCase(key)) {
+            return "Thank you for visiting. We hope you leave with a fresh connection to this garden and its stories.";
+        }
         if ("title".equalsIgnoreCase(key)) {
             return "Audio Guide";
         }

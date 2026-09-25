@@ -3,6 +3,7 @@ package com.pilgrimage.backend.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pilgrimage.backend.dto.EntityFilterRequest;
 import com.pilgrimage.backend.repository.UserRepository;
+import com.pilgrimage.backend.service.XperiencesService;
 import com.pilgrimage.backend.util.Class53EntityMapper;
 import com.pilgrimage.backend.util.CrmEntityMapper;
 import com.pilgrimage.backend.util.EntityAuthorizationHelper;
@@ -35,13 +36,19 @@ public class EntityController {
     private final JdbcTemplate jdbcTemplate;
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
     private final UserRepository userRepository;
+    private final XperiencesService xperiencesService;
     private final Map<String, Set<String>> tableColumnsCache = new ConcurrentHashMap<>();
     private final Map<String, Map<String, ColumnType>> tableColumnTypesCache = new ConcurrentHashMap<>();
 
-    public EntityController(JdbcTemplate jdbcTemplate, UserRepository userRepository) {
+    public EntityController(
+        JdbcTemplate jdbcTemplate,
+        UserRepository userRepository,
+        XperiencesService xperiencesService
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.namedJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate);
         this.userRepository = userRepository;
+        this.xperiencesService = xperiencesService;
     }
 
     @GetMapping("/{entity}")
@@ -275,6 +282,17 @@ public class EntityController {
             requireOwnershipOrAdmin(entity, table, id);
         }
 
+        String previousStatus = null;
+        if ("PortraitCommission".equals(entity)
+            && payload != null
+            && "completed".equalsIgnoreCase(String.valueOf(payload.get("status")))) {
+            previousStatus = jdbcTemplate.query(
+                "SELECT status FROM " + table + " WHERE id = ?",
+                (rs, rowNum) -> rs.getString("status"),
+                id
+            ).stream().findFirst().orElse(null);
+        }
+
         Map<String, Object> mappedPayload = payload != null ? new LinkedHashMap<>(payload) : new LinkedHashMap<>();
         if ("User".equals(entity)) {
             mappedPayload.remove("password");
@@ -318,6 +336,12 @@ public class EntityController {
             statement.setObject(columns.size() + 1, id);
             return statement;
         });
+
+        if ("PortraitCommission".equals(entity)
+            && "completed".equalsIgnoreCase(String.valueOf(filtered.get("status")))
+            && !"completed".equalsIgnoreCase(previousStatus)) {
+            xperiencesService.notifyPaintingCompleted(id);
+        }
 
         return fetchEntityById(entity, table, id);
     }

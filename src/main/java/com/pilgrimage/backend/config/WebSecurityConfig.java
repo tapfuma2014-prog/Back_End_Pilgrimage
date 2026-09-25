@@ -55,7 +55,11 @@ public class WebSecurityConfig {
             .authorizeHttpRequests(auth ->
                 auth.requestMatchers(HttpMethod.GET,
                         "/artists/**",
-                        "/api/artists/**"
+                        "/api/artists/**",
+                        "/events",
+                        "/events/**",
+                        "/api/events",
+                        "/api/events/**"
                     ).permitAll()
                    .requestMatchers(
                         new AntPathRequestMatcher("/auth/login"),
