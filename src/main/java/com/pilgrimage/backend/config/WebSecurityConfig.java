@@ -29,13 +29,16 @@ public class WebSecurityConfig {
     
     private final JwtAuthenticationEntryPoint unauthorizedHandler;
     private final JwtRequestFilter jwtRequestFilter;
+    private final XperienceAuthFilter xperienceAuthFilter;
     private final List<String> allowedOrigins;
     
     public WebSecurityConfig(JwtAuthenticationEntryPoint unauthorizedHandler, 
                            JwtRequestFilter jwtRequestFilter,
+                           XperienceAuthFilter xperienceAuthFilter,
                            @Value("${app.cors.allowed-origins:http://localhost:5173}") String allowedOrigins) {
         this.unauthorizedHandler = unauthorizedHandler;
         this.jwtRequestFilter = jwtRequestFilter;
+        this.xperienceAuthFilter = xperienceAuthFilter;
         this.allowedOrigins = Arrays.stream(allowedOrigins.split(","))
             .map(String::trim)
             .filter(origin -> !origin.isEmpty())
@@ -52,14 +55,27 @@ public class WebSecurityConfig {
             .csrf().disable()
             .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            // Security headers for the JSON API. CSP is document-agnostic ('none')
+            // since this service serves API responses, not HTML pages.
+            .headers(headers -> headers
+                .contentTypeOptions(contentType -> {})
+                .frameOptions(frame -> frame.deny())
+                .referrerPolicy(referrer -> referrer.policy(
+                    org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                .contentSecurityPolicy("default-src 'none'; frame-ancestors 'none'").and()
+                .permissionsPolicy(permissions -> permissions.policy(
+                    "camera=(), microphone=(), geolocation=(), payment=()"))
+            )
             .authorizeHttpRequests(auth ->
                 auth.requestMatchers(HttpMethod.GET,
                         "/artists/**",
                         "/api/artists/**",
-                        "/events",
+                        // Public catalogue reads — the SPA renders events/auctions
+                        // pages for anonymous visitors.
                         "/events/**",
-                        "/api/events",
-                        "/api/events/**"
+                        "/api/events/**",
+                        "/auctions/**",
+                        "/api/auctions/**"
                     ).permitAll()
                    .requestMatchers(
                         new AntPathRequestMatcher("/auth/login"),
@@ -68,6 +84,11 @@ public class WebSecurityConfig {
                         new AntPathRequestMatcher("/api/auth/login"),
                         new AntPathRequestMatcher("/api/auth/register"),
                         new AntPathRequestMatcher("/api/auth/password/**"),
+                        // The error dispatch must be reachable anonymously: with
+                        // authentication required, any controller error (403/404/500)
+                        // is re-authorized on the /error dispatch and masked as a
+                        // bare 401, which the SPA misreads as an expired session.
+                        new AntPathRequestMatcher("/error"),
                         new AntPathRequestMatcher("/search/**"),
                         new AntPathRequestMatcher("/artworks/**"),
                         new AntPathRequestMatcher("/api/search/**"),
@@ -89,13 +110,19 @@ public class WebSecurityConfig {
                         new AntPathRequestMatcher("/api/integrations/generate-image/preview"),
                         // Base44 compat routes enforce their own auth inside the controllers
                         new AntPathRequestMatcher("/apps/**"),
-                        new AntPathRequestMatcher("/api/apps/**")
+                        new AntPathRequestMatcher("/api/apps/**"),
+                        // Xperience endpoints use custom auth via XperienceAuthFilter
+                        new AntPathRequestMatcher("/xperience/**"),
+                        new AntPathRequestMatcher("/api/xperience/**")
                     ).permitAll()
                    .anyRequest().authenticated()
             );
             
         // Add JWT filter before the default authentication filter
         http.addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
+        
+        // Add Xperience auth filter before JWT filter for /xperience endpoints
+        http.addFilterBefore(xperienceAuthFilter, JwtRequestFilter.class);
         
         return http.build();
     }
@@ -105,7 +132,7 @@ public class WebSecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "X-Requested-With", "Origin"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "X-Requested-With", "Origin", "X-App-Secret", "X-Xperience-Signature"));
         configuration.setAllowCredentials(true);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

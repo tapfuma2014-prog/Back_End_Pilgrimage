@@ -73,7 +73,7 @@ public class JwtTokenUtil {
         if (isRefreshToken(token)) {
             return false;
         }
-        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+        return (username.equalsIgnoreCase(userDetails.getUsername()) && !isTokenExpired(token));
     }
 
     public boolean isRefreshToken(String token) {

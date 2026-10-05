@@ -22,12 +22,15 @@ public class JwtUserDetailsService implements UserDetailsService {
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
         // Generic message - do not reveal whether the email exists in the system.
-        User user = userRepository.findByEmail(email)
+        // Ignore-case lookup: JWT subjects are lowercased at mint time, but
+        // seeded/migrated rows may store mixed-case emails — an exact match
+        // would strand those sessions behind a perpetual 401.
+        User user = userRepository.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new UsernameNotFoundException("Invalid credentials"));
 
         String role = user.getRole() == null ? "user" : user.getRole().trim().toUpperCase();
         return new org.springframework.security.core.userdetails.User(
-                user.getEmail(),
+                user.getEmail().toLowerCase(),
                 user.getPassword(),
                 List.of(new SimpleGrantedAuthority("ROLE_" + role))
         );

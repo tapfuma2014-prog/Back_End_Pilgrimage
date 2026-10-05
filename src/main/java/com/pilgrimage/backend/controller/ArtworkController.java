@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,32 +26,51 @@ public class ArtworkController {
     }
 
     @GetMapping
-    public List<Map<String, Object>> listArtworks(@RequestParam(name = "inStock", required = false) Boolean inStock) {
-        String sql = """
-            SELECT id,
-                   title,
-                   artist,
-                   description,
-                   price,
-                   currency,
-                   "isInStock" AS is_in_stock,
-                   image_url,
-                   garden_origin,
-                   art_style,
-                   created_date
-            FROM artwork
-        """;
-
+    public List<Map<String, Object>> listArtworks(
+            @RequestParam(name = "inStock", required = false) Boolean inStock,
+            @RequestParam(name = "id", required = false) List<String> ids) {
         List<Object> params = new ArrayList<>();
+
+        String artworkSql = buildArtworkTableSql("artwork", "\"isInStock\"", ids, inStock, params);
+        String artworksSql = buildArtworkTableSql("artworks", "is_in_stock", ids, inStock, params);
+
+        String sql = """
+            SELECT id, title, artist, description, price, currency,
+                   is_in_stock, image_url, garden_origin, art_style, created_date
+            FROM (
+                %s
+                UNION
+                %s
+            ) combined
+            ORDER BY created_date DESC
+        """.formatted(artworkSql, artworksSql);
+
+        return jdbcTemplate.query(sql, (rs, rowNum) -> toArtworkMap(rs), params.toArray());
+    }
+
+    private String buildArtworkTableSql(
+            String table,
+            String inStockColumn,
+            List<String> ids,
+            Boolean inStock,
+            List<Object> params
+    ) {
+        List<String> conditions = new ArrayList<>();
         if (inStock != null) {
-            sql += " WHERE \"isInStock\" = ?";
+            conditions.add(inStockColumn + " = ?");
             params.add(inStock);
         }
-        sql += " ORDER BY created_date DESC";
+        if (ids != null && !ids.isEmpty()) {
+            conditions.add("id IN (" + String.join(",", Collections.nCopies(ids.size(), "?")) + ")");
+            params.addAll(ids);
+        }
 
-        return params.isEmpty()
-            ? jdbcTemplate.query(sql, (rs, rowNum) -> toArtworkMap(rs))
-            : jdbcTemplate.query(sql, (rs, rowNum) -> toArtworkMap(rs), params.toArray());
+        String where = conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
+        return """
+            SELECT id::text AS id, title, artist, description, price, currency,
+                   %s AS is_in_stock, image_url, garden_origin, art_style, created_date
+            FROM %s%s
+        """.formatted(inStockColumn, table, where);
     }
 
     @PutMapping("/{id}/image-url")

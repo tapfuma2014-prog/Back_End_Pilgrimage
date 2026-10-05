@@ -43,7 +43,8 @@ public final class EntityAuthorizationHelper {
         // Additional per-user records - reads/writes are scoped to the owner.
         "ArtRoverBooking", "GiftVoucher", "AuctionWinner", "TicketPurchase",
         "EventTicket", "SavedAddress", "SavedPostcard", "AiArtPurchase",
-        "PremiumSubscription", "GeneratedArt", "MerchReview", "WorkshopWaitlist"
+        "PremiumSubscription", "GeneratedArt", "MerchReview", "WorkshopWaitlist",
+        "ArtistFollow"
     );
 
     // Always admin-only, even for reads.
@@ -202,6 +203,8 @@ public final class EntityAuthorizationHelper {
         }
         sanitized.remove("created_by");
         sanitized.remove("updated_by");
+        // Any user-account column embedded in public catalogue rows must never leak.
+        sanitized.remove("user_email");
         return sanitized;
     }
 }

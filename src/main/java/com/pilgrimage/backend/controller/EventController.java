@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,9 +49,11 @@ public class EventController {
                    image_url,
                    featured_artists,
                    media_gallery,
-                   status,
+                   CASE WHEN status IS DISTINCT FROM 'cancelled'
+                         AND date::date < CURRENT_DATE
+                        THEN 'past' ELSE status END AS status,
                    created_date
-            FROM event
+            FROM events
         """;
 
         List<Object> params = new ArrayList<>();
@@ -94,11 +97,32 @@ public class EventController {
         map.put("capacity", rs.getObject("capacity"));
         map.put("tickets_sold", rs.getObject("tickets_sold"));
         map.put("image_url", rs.getString("image_url"));
-        map.put("featured_artists", parseJsonArray(rs.getString("featured_artists")));
+        map.put("featured_artists", toStringList(rs.getObject("featured_artists")));
         map.put("media_gallery", parseJsonArray(rs.getString("media_gallery")));
         map.put("status", rs.getString("status"));
         map.put("created_date", rs.getTimestamp("created_date"));
         return map;
+    }
+
+    private List<String> toStringList(Object value) throws java.sql.SQLException {
+        if (value == null) {
+            return new ArrayList<>();
+        }
+        if (value instanceof java.sql.Array sqlArray) {
+            Object array = sqlArray.getArray();
+            if (array instanceof String[] strings) {
+                return new ArrayList<>(Arrays.asList(strings));
+            }
+            if (array instanceof Object[] objects) {
+                List<String> list = new ArrayList<>();
+                for (Object o : objects) {
+                    list.add(String.valueOf(o));
+                }
+                return list;
+            }
+            return new ArrayList<>();
+        }
+        return parseJsonArray(String.valueOf(value));
     }
 
     @SuppressWarnings("unchecked")

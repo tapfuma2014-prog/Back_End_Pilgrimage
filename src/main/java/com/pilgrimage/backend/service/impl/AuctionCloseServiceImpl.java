@@ -41,13 +41,32 @@ public class AuctionCloseServiceImpl implements AuctionCloseService {
     @Override
     @Transactional
     public void closeExpiredAuctions() {
+        // Status 'completed' alone does not prove winners were recorded - if an
+        // earlier close attempt rolled back or the auction was marked completed
+        // in the data directly, bids exist but auction_winner rows do not.
+        // Reprocess any expired auction that still has bid artworks lacking a
+        // winner row; recordWinnerIfEligible() is idempotent per artwork.
         List<Map<String, Object>> expiredAuctions = jdbcTemplate.queryForList(
             """
             SELECT id, title, status, reserve_price, featured_artworks::text AS featured_artworks
             FROM auction
             WHERE end_date <= NOW()
-              AND status IS DISTINCT FROM 'completed'
               AND status IS DISTINCT FROM 'cancelled'
+              AND (
+                status IS DISTINCT FROM 'completed'
+                OR EXISTS (
+                    SELECT 1
+                    FROM auction_bid b
+                    WHERE b.auction_id = auction.id
+                      AND b.artwork_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM auction_winner w
+                          WHERE w.auction_id = auction.id
+                            AND w.artwork_id = b.artwork_id
+                      )
+                )
+              )
             """
         );
 

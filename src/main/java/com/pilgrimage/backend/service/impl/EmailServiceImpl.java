@@ -61,6 +61,34 @@ public class EmailServiceImpl implements EmailService {
     }
 
     @Override
+    public void sendVerificationEmail(String recipientEmail, String verificationLink) {
+        if (recipientEmail == null || recipientEmail.isBlank()) {
+            throw new RuntimeException("Recipient email is required");
+        }
+        if (verificationLink == null || verificationLink.isBlank()) {
+            throw new RuntimeException("Verification link is required");
+        }
+        if (!isConfigured()) {
+            log.error("Verification email not sent because SMTP is not configured");
+            throw new RuntimeException("Unable to send verification email");
+        }
+
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
+            helper.setFrom(configuredFromAddress);
+            helper.setTo(recipientEmail);
+            helper.setSubject("Verify your email – 53 Cox Road Pilgrimage");
+            helper.setText(buildVerificationBody(verificationLink), true);
+            mailSender.send(message);
+            log.info("Verification email sent to {}", maskEmail(recipientEmail));
+        } catch (MessagingException | MailException e) {
+            log.error("Failed to send verification email to {}: {}", maskEmail(recipientEmail), e.getMessage());
+            throw new RuntimeException("Unable to send verification email");
+        }
+    }
+
+    @Override
     public void sendPlainEmail(String recipientEmail, String subject, String body) {
         if (recipientEmail == null || recipientEmail.isBlank()) {
             throw new RuntimeException("Recipient email is required");
@@ -106,6 +134,28 @@ public class EmailServiceImpl implements EmailService {
         return mailHost != null && !mailHost.isBlank()
             && mailUsername != null && !mailUsername.isBlank()
             && configuredFromAddress != null && !configuredFromAddress.isBlank();
+    }
+
+    private String buildVerificationBody(String verificationLink) {
+        return """
+            <div style="font-family: Arial, Helvetica, sans-serif; color: #2D3436; line-height: 1.6; max-width: 600px;">
+              <p>Hello,</p>
+              <p>Welcome to <strong>53 Cox Road Pilgrimage</strong>! Please confirm your email address to complete your registration.</p>
+              <p style="margin: 28px 0;">
+                <a href="%s" style="background-color: #9CAF88; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; display: inline-block; font-weight: 600;">
+                  Verify Email
+                </a>
+              </p>
+              <p>If the button does not work, copy and paste this link into your browser:</p>
+              <p style="word-break: break-all;"><a href="%s">%s</a></p>
+              <p><strong>Important:</strong> This verification link is time-limited and will expire in 24 hours for your security.</p>
+              <p>If you did not create an account, you can safely ignore this email.</p>
+              <p style="margin-top: 32px; color: #5A6C5E; font-size: 14px;">
+                Kind regards,<br>
+                The 53 Cox Road Pilgrimage Team
+              </p>
+            </div>
+            """.formatted(verificationLink, verificationLink, verificationLink);
     }
 
     private String buildPasswordResetBody(String resetLink) {

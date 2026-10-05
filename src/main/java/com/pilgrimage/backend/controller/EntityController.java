@@ -3,7 +3,7 @@ package com.pilgrimage.backend.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pilgrimage.backend.dto.EntityFilterRequest;
 import com.pilgrimage.backend.repository.UserRepository;
-import com.pilgrimage.backend.service.XperiencesService;
+import com.pilgrimage.backend.service.GalleryStatusUpdateService;
 import com.pilgrimage.backend.util.Class53EntityMapper;
 import com.pilgrimage.backend.util.CrmEntityMapper;
 import com.pilgrimage.backend.util.EntityAuthorizationHelper;
@@ -21,7 +21,13 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Connection;
+import java.sql.Date;
 import java.sql.ResultSetMetaData;
+import java.sql.Timestamp;
+import java.sql.Types;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -36,19 +42,16 @@ public class EntityController {
     private final JdbcTemplate jdbcTemplate;
     private final NamedParameterJdbcTemplate namedJdbcTemplate;
     private final UserRepository userRepository;
-    private final XperiencesService xperiencesService;
+    private final GalleryStatusUpdateService galleryStatusUpdateService;
     private final Map<String, Set<String>> tableColumnsCache = new ConcurrentHashMap<>();
     private final Map<String, Map<String, ColumnType>> tableColumnTypesCache = new ConcurrentHashMap<>();
 
-    public EntityController(
-        JdbcTemplate jdbcTemplate,
-        UserRepository userRepository,
-        XperiencesService xperiencesService
-    ) {
+    public EntityController(JdbcTemplate jdbcTemplate, UserRepository userRepository,
+                            GalleryStatusUpdateService galleryStatusUpdateService) {
         this.jdbcTemplate = jdbcTemplate;
         this.namedJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate);
         this.userRepository = userRepository;
-        this.xperiencesService = xperiencesService;
+        this.galleryStatusUpdateService = galleryStatusUpdateService;
     }
 
     @GetMapping("/{entity}")
@@ -231,13 +234,44 @@ public class EntityController {
             if (!isAdmin) {
                 if (EntityAuthorizationHelper.isUserOwned(entity)
                     || "Artwork".equals(entity)
-                    || "Artist".equals(entity)) {
+                    || "Artist".equals(entity)
+                    // Community content is user-created: author owns the row via
+                    // created_by, reads stay public.
+                    || "Discussion".equals(entity)
+                    || "DiscussionComment".equals(entity)) {
                     data.put("created_by", username.toLowerCase());
                 } else if (EntityAuthorizationHelper.isPublicRead(entity)) {
                     throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin access required");
                 }
             } else if (!data.containsKey("created_by") || data.get("created_by") == null) {
                 data.put("created_by", username.toLowerCase());
+            }
+        }
+
+        if (!isAdmin && "ArtistFollow".equals(entity)) {
+            // A follow edge belongs to the authenticated caller — never trust a
+            // client-supplied follower_email (it is also the read-ownership key).
+            data.put("follower_email", username.toLowerCase());
+        }
+
+        if (!isAdmin && "AuctionWatchlist".equals(entity)) {
+            // A registration belongs to the authenticated caller — never trust
+            // a client-supplied user_id (it is also the read-ownership key).
+            String callerId = resolveUserId(username);
+            if (callerId != null) {
+                data.put("user_id", callerId);
+            }
+        }
+
+        // Tables whose only owner column is created_by_id (e.g. wishlist)
+        // otherwise insert unowned rows — invisible to their creator and
+        // impossible to update/delete.
+        if (allowedColumns.contains("created_by_id")
+            && (!data.containsKey("created_by_id") || data.get("created_by_id") == null
+                || data.get("created_by_id").toString().isBlank())) {
+            String callerId = resolveUserId(username);
+            if (callerId != null) {
+                data.put("created_by_id", callerId);
             }
         }
 
@@ -278,19 +312,17 @@ public class EntityController {
         }
 
         boolean isAdmin = EntityAuthorizationHelper.isAdmin(userRepository);
-        if (!isAdmin) {
+        if (!isAdmin && !isCounterOnlyUpdate(entity, payload)) {
             requireOwnershipOrAdmin(entity, table, id);
         }
 
         String previousStatus = null;
-        if ("PortraitCommission".equals(entity)
-            && payload != null
-            && "completed".equalsIgnoreCase(String.valueOf(payload.get("status")))) {
+        if ("PortraitCommission".equals(entity) && payload != null && payload.containsKey("status")) {
             previousStatus = jdbcTemplate.query(
-                "SELECT status FROM " + table + " WHERE id = ?",
-                (rs, rowNum) -> rs.getString("status"),
+                "SELECT status FROM portrait_commission WHERE id = ?",
+                rs -> rs.next() ? rs.getString("status") : null,
                 id
-            ).stream().findFirst().orElse(null);
+            );
         }
 
         Map<String, Object> mappedPayload = payload != null ? new LinkedHashMap<>(payload) : new LinkedHashMap<>();
@@ -316,6 +348,11 @@ public class EntityController {
         }
 
         mappedPayload.remove("created_by");
+        if (!isAdmin && "ArtistFollow".equals(entity)) {
+            // follower_email is the ownership key — updating it would let a user
+            // move a follow to someone else's account.
+            mappedPayload.remove("follower_email");
+        }
 
         Set<String> allowedColumns = getTableColumns(table);
         Map<String, Object> filtered = filterAllowedColumns(mappedPayload, allowedColumns);
@@ -337,13 +374,13 @@ public class EntityController {
             return statement;
         });
 
+        Map<String, Object> updatedEntity = fetchEntityById(entity, table, id);
         if ("PortraitCommission".equals(entity)
             && "completed".equalsIgnoreCase(String.valueOf(filtered.get("status")))
             && !"completed".equalsIgnoreCase(previousStatus)) {
-            xperiencesService.notifyPaintingCompleted(id);
+            galleryStatusUpdateService.triggerPaintingCompleted(id);
         }
-
-        return fetchEntityById(entity, table, id);
+        return updatedEntity;
     }
 
     @DeleteMapping("/{entity}/{id}")
@@ -539,6 +576,12 @@ public class EntityController {
                 data.put("created_by", email);
             }
         }
+        if ("ArtistFollow".equals(entity) && "artist_follows".equals(table)) {
+            if (!data.containsKey("follower_email") || data.get("follower_email") == null
+                || data.get("follower_email").toString().isBlank()) {
+                data.put("follower_email", email);
+            }
+        }
     }
 
     private static final Set<String> COMMUNITY_PLURAL_PREFERRED = Set.of(
@@ -585,6 +628,12 @@ public class EntityController {
         String snake = toSnakeCase(entity);
         if ("cart".equals(snake)) {
             return findTable("cart");
+        }
+        if ("event".equals(snake)) {
+            String eventsTable = findTable("events");
+            if (eventsTable != null) {
+                return eventsTable;
+            }
         }
         if ("order".equals(snake)) {
             String ordersTable = findTable("orders");
@@ -718,11 +767,16 @@ public class EntityController {
             String column = columns.get(i);
             Object value = values.get(column);
             ColumnType columnType = columnTypes.get(column);
+            Object boundValue;
             if (value instanceof Collection<?> collection) {
-                Object boundValue = coerceCollectionValue(connection, columnType, collection);
-                statement.setObject(i + 1, boundValue);
+                boundValue = coerceCollectionValue(connection, columnType, collection);
             } else {
-                statement.setObject(i + 1, value);
+                boundValue = coerceValue(value, columnType);
+            }
+            if (isJsonColumn(columnType)) {
+                statement.setObject(i + 1, boundValue, Types.OTHER);
+            } else {
+                statement.setObject(i + 1, boundValue);
             }
         }
     }
@@ -740,10 +794,63 @@ public class EntityController {
             Object[] elements = collection.toArray();
             return connection.createArrayOf(elementType, elements);
         }
+        if (columnType != null && ("jsonb".equalsIgnoreCase(columnType.udtName) || "json".equalsIgnoreCase(columnType.udtName))) {
+            try {
+                return JSON.writeValueAsString(collection);
+            } catch (Exception e) {
+                // fall through to safe string representation
+            }
+        }
         if (collection.isEmpty()) {
             return null;
         }
         return String.join(", ", collection.stream().map(String::valueOf).toList());
+    }
+
+    private boolean isJsonColumn(ColumnType columnType) {
+        return columnType != null && ("jsonb".equalsIgnoreCase(columnType.udtName) || "json".equalsIgnoreCase(columnType.udtName));
+    }
+
+    private Object coerceValue(Object value, ColumnType columnType) {
+        if (value == null || columnType == null) {
+            return value;
+        }
+        if (isJsonColumn(columnType)) {
+            if (value instanceof String) {
+                return value;
+            }
+            try {
+                return JSON.writeValueAsString(value);
+            } catch (Exception e) {
+                return String.valueOf(value);
+            }
+        }
+        if (value instanceof String s) {
+            if (s.isBlank()) {
+                return null;
+            }
+            String dataType = columnType.dataType.toLowerCase();
+            if (dataType.contains("timestamp")) {
+                try {
+                    Instant instant = Instant.parse(s);
+                    return Timestamp.from(instant);
+                } catch (Exception e) {
+                    try {
+                        return Timestamp.valueOf(LocalDateTime.parse(s));
+                    } catch (Exception e2) {
+                        return value;
+                    }
+                }
+            }
+            if ("date".equals(dataType)) {
+                try {
+                    return Date.valueOf(LocalDate.parse(s));
+                } catch (Exception e) {
+                    return value;
+                }
+            }
+        }
+        return value;
     }
 
     private static final class ColumnType {
@@ -784,9 +891,19 @@ public class EntityController {
 
     private String findOwnerColumn(String table) {
         Set<String> columns = getTableColumns(table);
+        // artist_follows rows are owned by the follower. created_by can be null
+        // or mismatched on migrated/seeded rows, which hides a user's own
+        // follows (and blocks their unfollow). follower_email is NOT NULL and
+        // is defaulted server-side, so it is the authoritative owner column.
+        if ("artist_follows".equals(table) && columns.contains("follower_email")) {
+            return "follower_email";
+        }
         List<String> candidates = List.of(
             "created_by", "user_email", "voter_email", "bidder_email",
-            "buyer_email", "artist_email", "organiser_email", "email"
+            "buyer_email", "artist_email", "organiser_email", "email",
+            // Base44 audit column storing users.id — last resort; compared
+            // against both the caller's email and their resolved users.id.
+            "created_by_id"
         );
         for (String candidate : candidates) {
             if (columns.contains(candidate)) {
@@ -794,6 +911,29 @@ public class EntityController {
             }
         }
         return null;
+    }
+
+    // Owner predicate for named-parameter queries. created_by_id stores
+    // users.id on this schema, so it is matched against the resolved id as well
+    // as the email (migrated rows may hold either).
+    private String ownerPredicate(String ownerColumn, MapSqlParameterSource params, String prefix, String email) {
+        params.addValue(prefix + "_email", email.toLowerCase());
+        if (!"created_by_id".equals(ownerColumn)) {
+            return "LOWER(" + ownerColumn + ") = :" + prefix + "_email";
+        }
+        String userId = resolveUserId(email);
+        if (userId == null) {
+            return "LOWER(" + ownerColumn + ") = :" + prefix + "_email";
+        }
+        params.addValue(prefix + "_id", userId);
+        return "(LOWER(" + ownerColumn + ") = :" + prefix + "_email OR " + ownerColumn + " = :" + prefix + "_id)";
+    }
+
+    private String resolveUserId(String email) {
+        if (email == null) {
+            return null;
+        }
+        return userRepository.findByEmail(email.toLowerCase()).map(u -> u.getId()).orElse(null);
     }
 
     private void appendArtworkVisibilityFilter(
@@ -816,15 +956,20 @@ public class EntityController {
         }
         String ownerColumn = findOwnerColumn(table);
         if (ownerColumn != null) {
-            clauses.add("(status = 'approved' OR LOWER(" + ownerColumn + ") = :artwork_owner_email)");
-            params.addValue("artwork_owner_email", email.toLowerCase());
+            clauses.add("(status = 'approved' OR " + ownerPredicate(ownerColumn, params, "artwork_owner", email.toLowerCase()) + ")");
             return;
         }
         clauses.add("status = 'approved'");
     }
 
     private void appendOwnershipFilter(String entity, String table, MapSqlParameterSource params, List<String> clauses) {
-        if (EntityAuthorizationHelper.isAdmin(userRepository) || !EntityAuthorizationHelper.isUserOwned(entity)) {
+        if (!EntityAuthorizationHelper.isUserOwned(entity)) {
+            return;
+        }
+        // Cart is a per-shopper entity with no admin list view - an admin's
+        // own cart must stay scoped, otherwise every admin sees all carts
+        // merged into one.
+        if (EntityAuthorizationHelper.isAdmin(userRepository) && !"Cart".equals(entity)) {
             return;
         }
         String email = EntityAuthorizationHelper.currentUserEmail();
@@ -835,12 +980,15 @@ public class EntityController {
         if (ownerColumn == null) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Ownership cannot be verified");
         }
-        clauses.add("LOWER(" + ownerColumn + ") = :owner_email");
-        params.addValue("owner_email", email.toLowerCase());
+        clauses.add(ownerPredicate(ownerColumn, params, "owner", email.toLowerCase()));
     }
 
     private void appendOwnershipFilter(String entity, String table, MapSqlParameterSource params, StringBuilder sql, String keyword) {
-        if (EntityAuthorizationHelper.isAdmin(userRepository) || !EntityAuthorizationHelper.isUserOwned(entity)) {
+        if (!EntityAuthorizationHelper.isUserOwned(entity)) {
+            return;
+        }
+        // Cart stays scoped to the caller even for admins (per-shopper data).
+        if (EntityAuthorizationHelper.isAdmin(userRepository) && !"Cart".equals(entity)) {
             return;
         }
         String email = EntityAuthorizationHelper.currentUserEmail();
@@ -851,8 +999,7 @@ public class EntityController {
         if (ownerColumn == null) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Ownership cannot be verified");
         }
-        sql.append(" ").append(keyword).append(" LOWER(").append(ownerColumn).append(") = :owner_email");
-        params.addValue("owner_email", email.toLowerCase());
+        sql.append(" ").append(keyword).append(" ").append(ownerPredicate(ownerColumn, params, "owner", email.toLowerCase()));
     }
 
     private void requireOwnershipOrAdmin(String entity, String table, String id) {
@@ -865,21 +1012,35 @@ public class EntityController {
         }
         if (!EntityAuthorizationHelper.isUserOwned(entity)
             && !"Artwork".equals(entity)
-            && !"Artist".equals(entity)) {
+            && !"Artist".equals(entity)
+            && !"Discussion".equals(entity)
+            && !"DiscussionComment".equals(entity)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin access required");
         }
         String ownerColumn = findOwnerColumn(table);
         if (ownerColumn == null) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Ownership cannot be verified");
         }
+        String userId = resolveUserId(email);
         Integer count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM " + table + " WHERE id = ? AND LOWER(" + ownerColumn + ") = LOWER(?)",
+            "SELECT COUNT(*) FROM " + table + " WHERE id = ? AND (LOWER(" + ownerColumn + ") = LOWER(?)"
+                + (userId != null ? " OR " + ownerColumn + " = ?" : "") + ")",
             Integer.class,
-            id,
-            email
+            userId != null ? new Object[]{id, email, userId} : new Object[]{id, email}
         );
         if (count == null || count == 0) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Forbidden");
         }
+    }
+
+    // Counter bumps (likes/comments) are performed by any signed-in user on
+    // posts they don't own, so they bypass the ownership check. Every key in
+    // the payload must be an allowed counter column.
+    private boolean isCounterOnlyUpdate(String entity, Map<String, Object> payload) {
+        if (!"Discussion".equals(entity) || payload == null || payload.isEmpty()) {
+            return false;
+        }
+        Set<String> counterColumns = Set.of("comments_count", "likes_count", "updated_date");
+        return counterColumns.containsAll(payload.keySet());
     }
 }

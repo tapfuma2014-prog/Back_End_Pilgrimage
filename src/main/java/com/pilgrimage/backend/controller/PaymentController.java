@@ -153,11 +153,19 @@ public class PaymentController {
         if (EntityAuthorizationHelper.isAdmin(userRepository)) {
             return;
         }
+        // Merch orders live in merch_order, artwork orders in orders - a
+        // capture must accept the owner of either table.
         Integer count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE id = ? AND LOWER(created_by) = LOWER(?)",
+            """
+            SELECT (
+                SELECT COUNT(*) FROM orders WHERE id = ? AND LOWER(created_by) = LOWER(?)
+            ) + (
+                SELECT COUNT(*) FROM merch_order WHERE id = ? AND LOWER(created_by) = LOWER(?)
+            )
+            """,
             Integer.class,
-            orderId,
-            email
+            orderId, email,
+            orderId, email
         );
         if (count == null || count == 0) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Order does not belong to authenticated user");

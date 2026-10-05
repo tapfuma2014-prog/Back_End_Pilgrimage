@@ -15,5 +15,8 @@ public interface AuthService {
     void requestPasswordReset(String email);
     void resetPassword(PasswordResetRequest passwordResetRequest);
     void verifyEmail(String token);
+    void resendVerificationEmail(String email);
+    void sendSmsOtp(String email, String phone);
+    void verifySmsOtp(String email, String code);
     void changePassword(String accessToken, String currentPassword, String newPassword, String confirmPassword);
 }

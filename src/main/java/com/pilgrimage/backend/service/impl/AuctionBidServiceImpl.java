@@ -72,6 +72,9 @@ public class AuctionBidServiceImpl implements AuctionBidService {
             );
         }
 
+        boolean isProxyBid = request.getMaxProxyBid() != null
+            && request.getMaxProxyBid().compareTo(request.getBidAmount()) > 0;
+
         List<Map<String, Object>> createdBids = new ArrayList<>();
         createdBids.add(insertBid(
             request.getAuctionId(),
@@ -80,7 +83,7 @@ public class AuctionBidServiceImpl implements AuctionBidService {
             request.getBidderName(),
             request.getBidAmount(),
             request.getMaxProxyBid(),
-            false
+            isProxyBid
         ));
 
         resolveProxyBids(request.getAuctionId(), request.getArtworkId(), artworkTitle, createdBids);
@@ -360,18 +363,33 @@ public class AuctionBidServiceImpl implements AuctionBidService {
     private BigDecimal loadArtworkPrice(String artworkId) {
         BigDecimal price = jdbcTemplate.query(
             "SELECT price FROM artwork WHERE id = ?",
-            rs -> rs.next() ? rs.getBigDecimal("price") : BigDecimal.ZERO,
+            rs -> rs.next() ? rs.getBigDecimal("price") : null,
+            artworkId
+        );
+        if (price != null) {
+            return price;
+        }
+        price = jdbcTemplate.query(
+            "SELECT price FROM artworks WHERE id = ?",
+            rs -> rs.next() ? rs.getBigDecimal("price") : null,
             artworkId
         );
         return price == null ? BigDecimal.ZERO : price;
     }
 
     private String loadArtworkTitle(String artworkId) {
-        return jdbcTemplate.query(
+        String title = jdbcTemplate.query(
             "SELECT title FROM artwork WHERE id = ?",
-            rs -> rs.next() ? rs.getString("title") : artworkId,
+            rs -> rs.next() ? rs.getString("title") : null,
             artworkId
         );
+        if (title != null) return title;
+        title = jdbcTemplate.query(
+            "SELECT title FROM artworks WHERE id = ?",
+            rs -> rs.next() ? rs.getString("title") : null,
+            artworkId
+        );
+        return title == null ? artworkId : title;
     }
 
     private String loadBidderName(String bidderId, String auctionId, String artworkId) {

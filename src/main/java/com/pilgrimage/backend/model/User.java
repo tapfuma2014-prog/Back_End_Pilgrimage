@@ -50,6 +50,22 @@ public class User {
     @Column(name = "verification_token_expiry")
     @JsonIgnore
     private LocalDateTime verificationTokenExpiry;
+
+    // E.164 format (e.g. +61412345678); optional — collected at signup or via profile.
+    @Column(name = "phone")
+    private String phone;
+
+    @Column(name = "phone_verified")
+    private Boolean phoneVerified = false;
+
+    // SHA-256 hash of the last SMS OTP sent; raw code only ever exists in the SMS.
+    @Column(name = "sms_otp_code")
+    @JsonIgnore
+    private String smsOtpCode;
+
+    @Column(name = "sms_otp_expiry")
+    @JsonIgnore
+    private LocalDateTime smsOtpExpiry;
     
     @PrePersist
     protected void onCreate() {
@@ -149,5 +165,37 @@ public class User {
 
     public void setVerificationTokenExpiry(LocalDateTime verificationTokenExpiry) {
         this.verificationTokenExpiry = verificationTokenExpiry;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
+    }
+
+    public Boolean getPhoneVerified() {
+        return phoneVerified;
+    }
+
+    public void setPhoneVerified(Boolean phoneVerified) {
+        this.phoneVerified = phoneVerified;
+    }
+
+    public String getSmsOtpCode() {
+        return smsOtpCode;
+    }
+
+    public void setSmsOtpCode(String smsOtpCode) {
+        this.smsOtpCode = smsOtpCode;
+    }
+
+    public LocalDateTime getSmsOtpExpiry() {
+        return smsOtpExpiry;
+    }
+
+    public void setSmsOtpExpiry(LocalDateTime smsOtpExpiry) {
+        this.smsOtpExpiry = smsOtpExpiry;
     }
 }

@@ -10,6 +10,7 @@ import com.pilgrimage.backend.repository.UserRepository;
 import com.pilgrimage.backend.security.JwtTokenUtil;
 import com.pilgrimage.backend.service.AuthService;
 import com.pilgrimage.backend.service.EmailService;
+import com.pilgrimage.backend.service.SmsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,6 +36,7 @@ public class AuthServiceImpl implements AuthService {
     private static final int SECURE_TOKEN_BYTES = 32;
     private static final int RESET_TOKEN_EXPIRY_HOURS = 1;
     private static final int VERIFICATION_TOKEN_EXPIRY_HOURS = 24;
+    private static final int SMS_OTP_EXPIRY_MINUTES = 10;
     private static final int MIN_PASSWORD_LENGTH = 8;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -43,6 +45,7 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
+    private final SmsService smsService;
     private final String frontendUrl;
 
     public AuthServiceImpl(AuthenticationManager authenticationManager,
@@ -50,12 +53,14 @@ public class AuthServiceImpl implements AuthService {
                           UserRepository userRepository,
                           PasswordEncoder passwordEncoder,
                           EmailService emailService,
+                          SmsService smsService,
                           @Value("${app.frontend-url:http://localhost:5173}") String frontendUrl) {
         this.authenticationManager = authenticationManager;
         this.jwtTokenUtil = jwtTokenUtil;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.emailService = emailService;
+        this.smsService = smsService;
         this.frontendUrl = frontendUrl;
     }
 
@@ -74,16 +79,23 @@ public class AuthServiceImpl implements AuthService {
                 )
             );
 
+            User user = userRepository.findByEmail(loginRequest.getEmail().toLowerCase().trim())
+                    .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+
+            // Credentials are valid but the account email is unconfirmed — block
+            // the session and surface a distinct message so the UI can offer a
+            // resend-verification path.
+            if (!Boolean.TRUE.equals(user.getEmailVerified())) {
+                log.info("Login blocked for unverified account");
+                throw new EmailNotVerifiedException();
+            }
+
             // Set the authentication in the security context
             SecurityContextHolder.getContext().setAuthentication(authentication);
             
             // Generate JWT token and refresh token
             String jwt = jwtTokenUtil.generateToken(authentication.getName());
             String refreshToken = jwtTokenUtil.generateRefreshToken(authentication.getName());
-            
-            // Get user details
-            User user = userRepository.findByEmail(loginRequest.getEmail().toLowerCase().trim())
-                    .orElseThrow(() -> new RuntimeException("User not found"));
             
             // Return JWT response with user details and refresh token
             return new JwtResponse(
@@ -95,10 +107,19 @@ public class AuthServiceImpl implements AuthService {
                 user.getRole()
             );
             
+        } catch (EmailNotVerifiedException e) {
+            throw e;
         } catch (Exception e) {
             // Do not log credentials or PII; a generic message is returned to the caller.
             log.warn("Authentication failed: {}", e.getClass().getSimpleName());
             throw new RuntimeException("Invalid email or password");
+        }
+    }
+
+    /** Marker so the unverified-email case survives the generic catch-all. */
+    private static final class EmailNotVerifiedException extends RuntimeException {
+        EmailNotVerifiedException() {
+            super("Please verify your email address before signing in. Check your inbox for the verification link.");
         }
     }
 
@@ -125,11 +146,26 @@ public class AuthServiceImpl implements AuthService {
         // Role is always 'user' at registration - never trust a client-supplied role.
         user.setRole("user");
         user.setEmailVerified(false);
+        if (registerRequest.getPhone() != null && !registerRequest.getPhone().isBlank()) {
+            user.setPhone(registerRequest.getPhone().trim());
+            user.setPhoneVerified(false);
+        }
         // Only the SHA-256 hash of the token is stored; the raw token lives only in the email link.
-        user.setVerificationToken(hashToken(generateSecureToken()));
+        String verificationToken = generateSecureToken();
+        user.setVerificationToken(hashToken(verificationToken));
         user.setVerificationTokenExpiry(LocalDateTime.now().plusHours(VERIFICATION_TOKEN_EXPIRY_HOURS));
 
-        return userRepository.save(user);
+        User savedUser = userRepository.save(user);
+
+        // Email the raw token link. A mail failure must not roll back the saved
+        // user (email verification is not enforced at login); it is logged instead.
+        try {
+            emailService.sendVerificationEmail(savedUser.getEmail(), buildVerificationLink(verificationToken));
+        } catch (Exception e) {
+            log.error("Verification email for {} was not sent: {}", savedUser.getEmail(), e.getMessage());
+        }
+
+        return savedUser;
     }
 
     @Override
@@ -148,10 +184,13 @@ public class AuthServiceImpl implements AuthService {
             user.setFullName(profileUpdateRequest.getFullName());
         }
         if (profileUpdateRequest.getEmail() != null && !profileUpdateRequest.getEmail().equals(email)) {
-            if (userRepository.existsByEmail(profileUpdateRequest.getEmail())) {
+            // Normalize to lowercase so the stored email matches what JWT
+            // subjects and login lookups expect (both are lowercased).
+            String normalizedEmail = profileUpdateRequest.getEmail().toLowerCase().trim();
+            if (userRepository.existsByEmail(normalizedEmail)) {
                 throw new RuntimeException("Email is already in use");
             }
-            user.setEmail(profileUpdateRequest.getEmail());
+            user.setEmail(normalizedEmail);
         }
 
         return userRepository.save(user);
@@ -211,6 +250,25 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
+    public void resendVerificationEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return;
+        }
+        User user = userRepository.findByEmail(email.toLowerCase().trim()).orElse(null);
+        // Silent on unknown or already-verified accounts — do not leak which emails are registered.
+        if (user == null || Boolean.TRUE.equals(user.getEmailVerified())) {
+            return;
+        }
+
+        String verificationToken = generateSecureToken();
+        user.setVerificationToken(hashToken(verificationToken));
+        user.setVerificationTokenExpiry(LocalDateTime.now().plusHours(VERIFICATION_TOKEN_EXPIRY_HOURS));
+        userRepository.save(user);
+
+        emailService.sendVerificationEmail(user.getEmail(), buildVerificationLink(verificationToken));
+    }
+
+    @Override
     public void verifyEmail(String token) {
         if (token == null || token.isBlank()) {
             throw new RuntimeException("Verification token is required");
@@ -227,6 +285,58 @@ public class AuthServiceImpl implements AuthService {
         user.setEmailVerified(true);
         user.setVerificationToken(null);
         user.setVerificationTokenExpiry(null);
+        userRepository.save(user);
+    }
+
+    @Override
+    public void sendSmsOtp(String email, String phone) {
+        if (email == null || email.isBlank()) {
+            throw new RuntimeException("Email is required");
+        }
+        User user = userRepository.findByEmail(email.toLowerCase().trim()).orElse(null);
+        // Silent on unknown accounts — do not leak which emails are registered.
+        if (user == null) {
+            return;
+        }
+
+        // A phone passed in the request becomes the user's (unverified) phone;
+        // otherwise reuse the stored one.
+        String targetPhone = (phone != null && !phone.isBlank()) ? phone.trim() : user.getPhone();
+        if (targetPhone == null || targetPhone.isBlank()) {
+            throw new RuntimeException("Phone number is required");
+        }
+        if (!targetPhone.equals(user.getPhone())) {
+            user.setPhone(targetPhone);
+            user.setPhoneVerified(false);
+        }
+
+        String code = generateOtp();
+        user.setSmsOtpCode(hashToken(code));
+        user.setSmsOtpExpiry(LocalDateTime.now().plusMinutes(SMS_OTP_EXPIRY_MINUTES));
+        userRepository.save(user);
+
+        smsService.sendSms(targetPhone,
+            "Your 53 Cox Road Gallery verification code is " + code + ". It expires in "
+                + SMS_OTP_EXPIRY_MINUTES + " minutes.");
+    }
+
+    @Override
+    public void verifySmsOtp(String email, String code) {
+        if (email == null || email.isBlank() || code == null || code.isBlank()) {
+            throw new RuntimeException("Invalid or expired verification code");
+        }
+        User user = userRepository.findByEmail(email.toLowerCase().trim())
+                .orElseThrow(() -> new RuntimeException("Invalid or expired verification code"));
+
+        if (user.getSmsOtpCode() == null || user.getSmsOtpExpiry() == null
+                || LocalDateTime.now().isAfter(user.getSmsOtpExpiry())
+                || !user.getSmsOtpCode().equals(hashToken(code.trim()))) {
+            throw new RuntimeException("Invalid or expired verification code");
+        }
+
+        user.setPhoneVerified(true);
+        user.setSmsOtpCode(null);
+        user.setSmsOtpExpiry(null);
         userRepository.save(user);
     }
 
@@ -298,11 +408,24 @@ public class AuthServiceImpl implements AuthService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
     }
 
+    private String generateOtp() {
+        return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
     private String buildPasswordResetLink(String resetToken) {
+        return frontendBaseUrl() + "/reset-password?rkey=" + resetToken;
+    }
+
+    // Frontend route served by CustomEmailVerification (/verify-email?token=...)
+    private String buildVerificationLink(String verificationToken) {
+        return frontendBaseUrl() + "/verify-email?token=" + verificationToken;
+    }
+
+    private String frontendBaseUrl() {
         String baseUrl = frontendUrl == null ? "" : frontendUrl.trim();
         if (baseUrl.endsWith("/")) {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
-        return baseUrl + "/reset-password?rkey=" + resetToken;
+        return baseUrl;
     }
 }

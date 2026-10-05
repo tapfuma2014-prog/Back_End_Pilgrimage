@@ -4,6 +4,7 @@ public class RegisterRequest {
     private String fullName;
     private String email;
     private String password;
+    private String phone;
     // NOTE: no 'role' field - self-registration must never be able to set a role.
     
     public String getFullName() {
@@ -28,5 +29,13 @@ public class RegisterRequest {
     
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
     }
 }

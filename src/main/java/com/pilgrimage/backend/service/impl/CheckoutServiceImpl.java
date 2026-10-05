@@ -194,6 +194,8 @@ public class CheckoutServiceImpl implements CheckoutService {
             request.getOrderId()
         );
 
+        notifyArtistsOfArtworkSale(request.getOrderId(), items, stringValue(order.get("created_by")));
+
         return fetchArtOrderById(request.getOrderId());
     }
 
@@ -273,6 +275,7 @@ public class CheckoutServiceImpl implements CheckoutService {
             orderItem.put("artwork_id", artworkId);
             orderItem.put("title", stringValue(artwork.get("title")));
             orderItem.put("artist", stringValue(artwork.get("artist")));
+            orderItem.put("artist_email", stringValue(artwork.get("created_by")));
             orderItem.put("quantity", quantity);
             orderItem.put("price", unitPrice);
             orderItems.add(orderItem);
@@ -352,6 +355,57 @@ public class CheckoutServiceImpl implements CheckoutService {
         return new CheckoutCart(orderItems, subtotal);
     }
 
+    private void notifyArtistsOfArtworkSale(String orderId, List<Map<String, Object>> items, String buyerEmail) {
+        Map<String, List<String>> salesByArtist = new LinkedHashMap<>();
+        for (Map<String, Object> item : items) {
+            String artistEmail = stringValue(item.get("artist_email"));
+            if (isBlank(artistEmail)) {
+                continue;
+            }
+            String title = stringValue(item.get("title"));
+            salesByArtist
+                .computeIfAbsent(artistEmail.toLowerCase(), k -> new ArrayList<>())
+                .add(title == null ? "Untitled artwork" : title);
+        }
+
+        for (Map.Entry<String, List<String>> sale : salesByArtist.entrySet()) {
+            String artistEmail = sale.getKey();
+            List<String> titles = sale.getValue();
+            String message = titles.size() == 1
+                ? "Your artwork \"" + titles.get(0) + "\" was just purchased. The gallery will coordinate fulfilment."
+                : titles.size() + " of your artworks were just purchased: " + String.join(", ", titles) + ".";
+            jdbcTemplate.update(
+                """
+                INSERT INTO notifications (id, user_email, type, title, message, link, is_read, created_by, created_date, updated_date)
+                VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, NOW(), NOW())
+                """,
+                UUID.randomUUID().toString(),
+                artistEmail,
+                "artwork_sold",
+                "Artwork Sold",
+                message,
+                "/artistdashboard",
+                artistEmail
+            );
+        }
+
+        if (!isBlank(buyerEmail)) {
+            jdbcTemplate.update(
+                """
+                INSERT INTO notifications (id, user_email, type, title, message, link, is_read, created_by, created_date, updated_date)
+                VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, NOW(), NOW())
+                """,
+                UUID.randomUUID().toString(),
+                buyerEmail.toLowerCase(),
+                "order_confirmed",
+                "Order Confirmed",
+                "Your payment was received and your art order " + orderId + " is confirmed.",
+                "/mydashboard",
+                buyerEmail.toLowerCase()
+            );
+        }
+    }
+
     private Map<String, Object> loadMerchandise(String merchandiseId) {
         List<Map<String, Object>> products = jdbcTemplate.queryForList(
             """
@@ -375,7 +429,7 @@ public class CheckoutServiceImpl implements CheckoutService {
     private Map<String, Object> loadAvailableArtwork(String artworkId) {
         List<Map<String, Object>> artworks = jdbcTemplate.queryForList(
             """
-            SELECT id, title, artist, price, "isInStock"
+            SELECT id, title, artist, price, "isInStock", created_by
             FROM artwork
             WHERE id = ?
             """,

@@ -62,6 +62,7 @@ public class PortraitCommissionController {
                    background_preference,
                    reference_image,
                    reference_images,
+                   sample_portrait_image,
                    mood_keywords,
                    special_requests,
                    total_price,
@@ -114,6 +115,7 @@ public class PortraitCommissionController {
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> createCommission(
         @RequestPart("file") MultipartFile file,
+        @RequestPart(name = "sampleFile", required = false) MultipartFile sampleFile,
         @RequestParam(name = "artistId", required = false) String artistId,
         @RequestParam(name = "artistName", required = false) String artistName,
         @RequestParam(name = "style", required = false) String style,
@@ -141,6 +143,17 @@ public class PortraitCommissionController {
             .path(storedName)
             .toUriString();
 
+        // Optional second upload: a sample portrait the rider supplies as a
+        // style reference for the artist (distinct from the subject photo above).
+        String sampleUrl = null;
+        if (sampleFile != null && !sampleFile.isEmpty()) {
+            String sampleStoredName = fileStorageService.store(sampleFile);
+            sampleUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/integrations/uploads/")
+                .path(sampleStoredName)
+                .toUriString();
+        }
+
         String id = UUID.randomUUID().toString();
         String email = (contactEmail != null && !contactEmail.isBlank()) ? contactEmail.trim() : caller;
         String referenceImagesJson;
@@ -154,9 +167,10 @@ public class PortraitCommissionController {
             INSERT INTO portrait_commission (
                 id, artist_id, artist_name, contact_email, contact_phone,
                 style, size, special_requests, reference_image, reference_images,
+                sample_portrait_image,
                 status, progress_stage, progress_percentage, revision_count, max_revisions,
                 email_notifications, sms_notifications, created_by, created_date, updated_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb),
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?,
                       'submitted', 'Awaiting Start', 0, 0, 2, true, false, ?, now(), now())
             """,
             id,
@@ -169,6 +183,7 @@ public class PortraitCommissionController {
             specialRequests,
             fileUrl,
             referenceImagesJson,
+            sampleUrl,
             caller
         );
 
@@ -182,6 +197,7 @@ public class PortraitCommissionController {
         response.put("size", size);
         response.put("special_requests", specialRequests);
         response.put("reference_image", fileUrl);
+        response.put("sample_portrait_image", sampleUrl);
         response.put("status", "submitted");
         response.put("progress_stage", "Awaiting Start");
         response.put("progress_percentage", 0);
@@ -210,6 +226,7 @@ public class PortraitCommissionController {
                    milestones,
                    progress_history,
                    reference_image,
+                   sample_portrait_image,
                    created_date,
                    updated_date
             FROM portrait_commission
@@ -254,6 +271,7 @@ public class PortraitCommissionController {
                    milestones,
                    progress_history,
                    reference_image,
+                   sample_portrait_image,
                    created_by,
                    created_date,
                    updated_date
@@ -321,6 +339,7 @@ public class PortraitCommissionController {
         map.put("milestones", parseJsonArray(rs.getString("milestones")));
         map.put("progress_history", parseJsonArray(rs.getString("progress_history")));
         map.put("reference_image", rs.getString("reference_image"));
+        map.put("sample_portrait_image", rs.getString("sample_portrait_image"));
         map.put("created_date", rs.getTimestamp("created_date"));
         map.put("updated_date", rs.getTimestamp("updated_date"));
         return map;
@@ -339,6 +358,7 @@ public class PortraitCommissionController {
         map.put("background_preference", rs.getString("background_preference"));
         map.put("reference_image", rs.getString("reference_image"));
         map.put("reference_images", parseJsonArray(rs.getString("reference_images")));
+        map.put("sample_portrait_image", rs.getString("sample_portrait_image"));
         map.put("mood_keywords", parseJsonArray(rs.getString("mood_keywords")));
         map.put("special_requests", rs.getString("special_requests"));
         map.put("total_price", rs.getObject("total_price"));

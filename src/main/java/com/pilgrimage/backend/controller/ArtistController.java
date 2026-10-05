@@ -30,6 +30,13 @@ public class ArtistController {
     @GetMapping
     public List<Map<String, Object>> listArtists(@RequestParam(name = "isFeatured", required = false) Boolean isFeatured,
                                                  @RequestParam(name = "isAvailable", required = false) Boolean isAvailable) {
+        // created_by holds uploader emails — never expose it on the public endpoint.
+        List<Map<String, Object>> artists = fetchArtists(isFeatured, isAvailable);
+        artists.forEach(a -> a.remove("created_by"));
+        return artists;
+    }
+
+    private List<Map<String, Object>> fetchArtists(Boolean isFeatured, Boolean isAvailable) {
         String sql = """
             SELECT id,
                    name,
@@ -96,7 +103,7 @@ public class ArtistController {
     @GetMapping("/with-artworks")
     public List<Map<String, Object>> listArtistsWithArtworks(@RequestParam(name = "isFeatured", required = false) Boolean isFeatured,
                                                              @RequestParam(name = "isAvailable", required = false) Boolean isAvailable) {
-        List<Map<String, Object>> artists = listArtists(isFeatured, isAvailable);
+        List<Map<String, Object>> artists = fetchArtists(isFeatured, isAvailable);
 
         // Only approved, non-sample artworks are exposed in the public listing.
         List<Map<String, Object>> artworks = jdbcTemplate.query("""
@@ -147,6 +154,12 @@ public class ArtistController {
             artist.put("artworks", new ArrayList<>(works));
             artist.put("artwork_count", works.size());
         }
+
+        // Strip uploader emails from the public payload (artists + nested artworks).
+        for (Map<String, Object> artwork : artworks) {
+            artwork.remove("created_by");
+        }
+        artists.forEach(a -> a.remove("created_by"));
 
         return artists;
     }

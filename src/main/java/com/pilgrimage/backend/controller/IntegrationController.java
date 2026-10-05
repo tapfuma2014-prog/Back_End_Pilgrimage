@@ -30,7 +30,6 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -122,7 +121,7 @@ public class IntegrationController {
         if (!resource.exists() || !resource.isReadable()) {
             return ResponseEntity.notFound().build();
         }
-        String contentType = Files.probeContentType(resource.getFile().toPath());
+        String contentType = java.net.URLConnection.guessContentTypeFromName(filename);
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_TYPE, contentType != null ? contentType : MediaType.APPLICATION_OCTET_STREAM_VALUE)
             .body(resource);
