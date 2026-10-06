@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingRequestWrapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,14 +34,19 @@ public class XperienceAuthFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Fail closed: a blank configured secret must never authenticate anything.
+        if (appSecret == null || appSecret.isBlank()) {
+            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+            response.getWriter().write("Xperience secret is not configured");
+            return;
+        }
+
         // Check X-App-Secret header
         String appSecretHeader = request.getHeader("X-App-Secret");
         boolean isValid = false;
 
         if (appSecretHeader != null && !appSecretHeader.isBlank()) {
-            if (appSecret != null && appSecret.equals(appSecretHeader)) {
-                isValid = true;
-            }
+            isValid = secretEquals(appSecret, appSecretHeader);
         }
 
         // Check Authorization: Bearer header
@@ -48,17 +54,17 @@ public class XperienceAuthFilter extends OncePerRequestFilter {
             String authHeader = request.getHeader("Authorization");
             if (authHeader != null && authHeader.startsWith("Bearer ")) {
                 String bearerToken = authHeader.substring(7);
-                if (appSecret != null && appSecret.equals(bearerToken)) {
-                    isValid = true;
-                }
+                isValid = secretEquals(appSecret, bearerToken);
             }
         }
 
-        // Optional: Verify X-Xperience-Signature if present
+        // Optional: Verify X-Xperience-Signature if present. Wrap the request so
+        // reading the body here does not consume it for downstream @RequestBody binding.
+        ContentCachingRequestWrapper wrappedRequest = new ContentCachingRequestWrapper(request);
         if (isValid) {
-            String signature = request.getHeader("X-Xperience-Signature");
+            String signature = wrappedRequest.getHeader("X-Xperience-Signature");
             if (signature != null && !signature.isBlank()) {
-                if (!verifySignature(request, signature)) {
+                if (!verifySignature(wrappedRequest, signature)) {
                     response.setStatus(HttpStatus.UNAUTHORIZED.value());
                     response.getWriter().write("Invalid signature");
                     return;
@@ -72,7 +78,13 @@ public class XperienceAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        filterChain.doFilter(request, response);
+        filterChain.doFilter(wrappedRequest, response);
+    }
+
+    private boolean secretEquals(String expected, String provided) {
+        return MessageDigest.isEqual(
+            expected.getBytes(StandardCharsets.UTF_8),
+            provided.getBytes(StandardCharsets.UTF_8));
     }
 
     private boolean verifySignature(HttpServletRequest request, String providedSignature) {

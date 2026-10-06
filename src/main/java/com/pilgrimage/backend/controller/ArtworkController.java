@@ -1,5 +1,8 @@
 package com.pilgrimage.backend.controller;
 
+import com.pilgrimage.backend.repository.UserRepository;
+import com.pilgrimage.backend.util.EntityAuthorizationHelper;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -8,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,9 +24,11 @@ import java.util.Map;
 public class ArtworkController {
 
     private final JdbcTemplate jdbcTemplate;
+    private final UserRepository userRepository;
 
-    public ArtworkController(JdbcTemplate jdbcTemplate) {
+    public ArtworkController(JdbcTemplate jdbcTemplate, UserRepository userRepository) {
         this.jdbcTemplate = jdbcTemplate;
+        this.userRepository = userRepository;
     }
 
     @GetMapping
@@ -81,6 +87,24 @@ public class ArtworkController {
         String imageUrl = payload.get("image_url");
         if (imageUrl == null || imageUrl.isBlank()) {
             throw new IllegalArgumentException("image_url is required");
+        }
+
+        String email = EntityAuthorizationHelper.currentUserEmail();
+        if (email == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        if (!EntityAuthorizationHelper.isAdmin(userRepository)) {
+            String ownerEmail = jdbcTemplate.query(
+                "SELECT created_by FROM artwork WHERE id = ?",
+                rs -> rs.next() ? rs.getString(1) : null,
+                id
+            );
+            if (ownerEmail == null) {
+                throw new IllegalArgumentException("Artwork not found with id: " + id);
+            }
+            if (!ownerEmail.equalsIgnoreCase(email)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only update your own artworks");
+            }
         }
 
         int updated = jdbcTemplate.update(

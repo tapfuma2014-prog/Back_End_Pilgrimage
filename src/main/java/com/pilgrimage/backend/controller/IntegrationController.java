@@ -104,6 +104,7 @@ public class IntegrationController {
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> upload(@RequestPart("file") MultipartFile file) {
+        requireAuthenticatedUser();
         String storedName = fileStorageService.store(file);
         String fileUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
             .path("/integrations/uploads/")

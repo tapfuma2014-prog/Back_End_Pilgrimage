@@ -279,6 +279,17 @@ public class EntityController {
             data.put("id", UUID.randomUUID().toString());
         }
 
+        if ("Artwork".equals(entity)) {
+            // Non-admin users must never create artwork that bypasses the
+            // approval queue (ADM-002).
+            if (!isAdmin) {
+                data.put("status", "pending_review");
+            } else if (data.containsKey("status") && !isValidArtworkStatus(data.get("status"))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Invalid artwork status: " + data.get("status"));
+            }
+        }
+
         Map<String, Object> filtered = filterAllowedColumns(data, allowedColumns);
 
         if (filtered.isEmpty()) {
@@ -296,6 +307,7 @@ public class EntityController {
             return statement;
         });
 
+        recordAudit(entity, "create", filtered.get("id"));
         return fetchEntityById(entity, table, filtered.get("id"));
     }
 
@@ -354,6 +366,10 @@ public class EntityController {
             mappedPayload.remove("follower_email");
         }
 
+        // Server-side validation of enum-like status fields (ADM-005): reject
+        // unknown values and enforce permitted order-status transitions.
+        validateStatusTransitions(entity, table, id, mappedPayload);
+
         Set<String> allowedColumns = getTableColumns(table);
         Map<String, Object> filtered = filterAllowedColumns(mappedPayload, allowedColumns);
         filtered.remove("id");
@@ -380,7 +396,63 @@ public class EntityController {
             && !"completed".equalsIgnoreCase(previousStatus)) {
             galleryStatusUpdateService.triggerPaintingCompleted(id);
         }
+        recordAudit(entity, "update", id);
         return updatedEntity;
+    }
+
+    private static final Set<String> ALLOWED_ARTWORK_STATUSES = Set.of(
+        "pending_review", "approved", "rejected", "sold", "archived", "draft", "pending");
+
+    private static final Set<String> ALLOWED_ORDER_STATUSES = Set.of(
+        "pending", "processing", "shipped", "delivered", "cancelled", "confirmed");
+
+    // Permitted forward transitions; 'cancelled' allowed from pending/processing/confirmed.
+    private static final Map<String, Set<String>> ORDER_STATUS_TRANSITIONS = Map.of(
+        "pending", Set.of("processing", "confirmed", "cancelled"),
+        "confirmed", Set.of("processing", "shipped", "cancelled"),
+        "processing", Set.of("shipped", "cancelled"),
+        "shipped", Set.of("delivered"),
+        "delivered", Set.of(),
+        "cancelled", Set.of());
+
+    private boolean isValidArtworkStatus(Object status) {
+        return status != null
+            && ALLOWED_ARTWORK_STATUSES.contains(String.valueOf(status).trim().toLowerCase());
+    }
+
+    private void validateStatusTransitions(String entity, String table, String id, Map<String, Object> mappedPayload) {
+        if ("Artwork".equals(entity) && mappedPayload.containsKey("status")
+            && !isValidArtworkStatus(mappedPayload.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Invalid artwork status: " + mappedPayload.get("status"));
+        }
+
+        boolean isOrder = "Order".equals(entity) || "orders".equals(table) || "merch_order".equals(table);
+        if (!isOrder || !mappedPayload.containsKey("order_status")) {
+            return;
+        }
+        String newStatus = String.valueOf(mappedPayload.get("order_status")).trim().toLowerCase();
+        if (!ALLOWED_ORDER_STATUSES.contains(newStatus)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Invalid order status: " + mappedPayload.get("order_status"));
+        }
+        String currentStatus = jdbcTemplate.query(
+            "SELECT order_status FROM " + table + " WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null,
+            id
+        );
+        if (currentStatus == null) {
+            return;
+        }
+        String current = currentStatus.trim().toLowerCase();
+        if (current.equals(newStatus)) {
+            return;
+        }
+        Set<String> allowed = ORDER_STATUS_TRANSITIONS.getOrDefault(current, Set.of());
+        if (!allowed.contains(newStatus)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Invalid order status transition: " + current + " -> " + newStatus);
+        }
     }
 
     @DeleteMapping("/{entity}/{id}")
@@ -397,7 +469,50 @@ public class EntityController {
         }
 
         jdbcTemplate.update("DELETE FROM " + table + " WHERE id = ?", id);
+        recordAudit(entity, "delete", id);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Best-effort admin audit trail (ADM-009). The audit_log table exists in the
+     * deployed DB but has no local schema entry, so columns are matched
+     * dynamically and failures never block the actual mutation.
+     */
+    private void recordAudit(String entity, String action, Object recordId) {
+        try {
+            if (resolveTable("AuditLog") == null) {
+                return;
+            }
+            Set<String> auditColumns = getTableColumns("audit_log");
+            if (auditColumns == null || auditColumns.isEmpty()) {
+                return;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", UUID.randomUUID().toString());
+            row.put("actor", resolveAuthenticatedUser());
+            row.put("action", action);
+            row.put("entity", entity);
+            row.put("record_id", recordId != null ? String.valueOf(recordId) : null);
+            row.put("created_date", new java.sql.Timestamp(System.currentTimeMillis()));
+
+            List<String> cols = new ArrayList<>();
+            List<Object> vals = new ArrayList<>();
+            for (Map.Entry<String, Object> e : row.entrySet()) {
+                if (auditColumns.contains(e.getKey()) && e.getValue() != null) {
+                    cols.add(e.getKey());
+                    vals.add(e.getValue());
+                }
+            }
+            if (cols.isEmpty()) {
+                return;
+            }
+            String placeholders = String.join(", ", Collections.nCopies(cols.size(), "?"));
+            jdbcTemplate.update(
+                "INSERT INTO audit_log (" + String.join(", ", cols) + ") VALUES (" + placeholders + ")",
+                vals.toArray());
+        } catch (Exception ignored) {
+            // Auditing must never break the actual write path.
+        }
     }
 
     private Map<String, Object> mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {

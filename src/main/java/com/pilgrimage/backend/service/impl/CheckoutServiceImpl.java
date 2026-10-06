@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pilgrimage.backend.dto.OrderCaptureRequest;
 import com.pilgrimage.backend.dto.OrderCheckoutRequest;
+import com.pilgrimage.backend.repository.UserRepository;
 import com.pilgrimage.backend.service.CheckoutService;
 import com.pilgrimage.backend.service.StripeService;
 import com.pilgrimage.backend.util.EntityAuthorizationHelper;
@@ -32,15 +33,18 @@ public class CheckoutServiceImpl implements CheckoutService {
     private final JdbcTemplate jdbcTemplate;
     private final StripeService stripeService;
     private final ObjectMapper objectMapper;
+    private final UserRepository userRepository;
 
     public CheckoutServiceImpl(
         JdbcTemplate jdbcTemplate,
         StripeService stripeService,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        UserRepository userRepository
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.stripeService = stripeService;
         this.objectMapper = objectMapper;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -135,6 +139,17 @@ public class CheckoutServiceImpl implements CheckoutService {
 
         if (order.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+
+        // IDOR guard: only the order owner (or an admin) may capture the payment.
+        String callerEmail = EntityAuthorizationHelper.currentUserEmail();
+        if (callerEmail == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        String orderOwner = stringValue(order.get("created_by"));
+        if (orderOwner != null && !orderOwner.equalsIgnoreCase(callerEmail)
+            && !EntityAuthorizationHelper.isAdmin(userRepository)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Order does not belong to the authenticated user");
         }
 
         String paymentStatus = stringValue(order.get("payment_status"));
