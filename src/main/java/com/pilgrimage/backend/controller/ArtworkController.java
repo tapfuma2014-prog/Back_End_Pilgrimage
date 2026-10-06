@@ -108,8 +108,8 @@ public class ArtworkController {
         }
 
         int updated = jdbcTemplate.update(
-            "UPDATE artwork SET image_url = ? WHERE id = ?",
-            imageUrl, id
+            "UPDATE artwork SET image_url = ?, updated_by = ? WHERE id = ?",
+            imageUrl, email, id
         );
 
         if (updated == 0) {

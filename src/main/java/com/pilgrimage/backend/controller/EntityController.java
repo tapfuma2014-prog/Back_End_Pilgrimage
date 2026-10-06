@@ -230,22 +230,20 @@ public class EntityController {
         Set<String> allowedColumns = getTableColumns(table);
 
         applyAuthenticatedDefaults(entity, table, data, username);
+        if (!isAdmin
+            && EntityAuthorizationHelper.isPublicRead(entity)
+            && !EntityAuthorizationHelper.isUserOwned(entity)
+            && !"Artwork".equals(entity)
+            && !"Artist".equals(entity)
+            && !"Discussion".equals(entity)
+            && !"DiscussionComment".equals(entity)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin access required");
+        }
         if (allowedColumns.contains("created_by")) {
-            if (!isAdmin) {
-                if (EntityAuthorizationHelper.isUserOwned(entity)
-                    || "Artwork".equals(entity)
-                    || "Artist".equals(entity)
-                    // Community content is user-created: author owns the row via
-                    // created_by, reads stay public.
-                    || "Discussion".equals(entity)
-                    || "DiscussionComment".equals(entity)) {
-                    data.put("created_by", username.toLowerCase());
-                } else if (EntityAuthorizationHelper.isPublicRead(entity)) {
-                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin access required");
-                }
-            } else if (!data.containsKey("created_by") || data.get("created_by") == null) {
-                data.put("created_by", username.toLowerCase());
-            }
+            data.put("created_by", username.toLowerCase());
+        }
+        if (allowedColumns.contains("updated_by")) {
+            data.put("updated_by", username.toLowerCase());
         }
 
         if (!isAdmin && "ArtistFollow".equals(entity)) {
@@ -360,6 +358,7 @@ public class EntityController {
         }
 
         mappedPayload.remove("created_by");
+        mappedPayload.remove("updated_by");
         if (!isAdmin && "ArtistFollow".equals(entity)) {
             // follower_email is the ownership key — updating it would let a user
             // move a follow to someone else's account.
@@ -371,6 +370,13 @@ public class EntityController {
         validateStatusTransitions(entity, table, id, mappedPayload);
 
         Set<String> allowedColumns = getTableColumns(table);
+        String username = resolveAuthenticatedUser();
+        if (username == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        if (allowedColumns.contains("updated_by")) {
+            mappedPayload.put("updated_by", username.toLowerCase());
+        }
         Map<String, Object> filtered = filterAllowedColumns(mappedPayload, allowedColumns);
         filtered.remove("id");
 

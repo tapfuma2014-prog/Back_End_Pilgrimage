@@ -78,7 +78,13 @@ public class CartController {
             if (quantity < 1 || quantity > 9999) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be between 1 and 9999");
             }
-            jdbcTemplate.update("UPDATE cart SET quantity = ? WHERE id = ?", quantity, id);
+            String currentUser = EntityAuthorizationHelper.currentUserEmail();
+            jdbcTemplate.update(
+                "UPDATE cart SET quantity = ?, updated_by = ? WHERE id = ?",
+                quantity,
+                currentUser,
+                id
+            );
         }
         return ResponseEntity.ok().build();
     }

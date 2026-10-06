@@ -80,7 +80,8 @@ public class NotificationController {
             }
         }
         jdbcTemplate.update(
-            "UPDATE notifications SET is_read = true, updated_date = NOW() WHERE id = ?",
+            "UPDATE notifications SET is_read = true, updated_date = NOW(), updated_by = ? WHERE id = ?",
+            caller,
             id
         );
         return ResponseEntity.ok().build();
@@ -97,7 +98,8 @@ public class NotificationController {
             effectiveEmail = userEmail;
         }
         jdbcTemplate.update(
-            "UPDATE notifications SET is_read = true, updated_date = NOW() WHERE LOWER(user_email) = LOWER(?)",
+            "UPDATE notifications SET is_read = true, updated_date = NOW(), updated_by = ? WHERE LOWER(user_email) = LOWER(?)",
+            caller,
             effectiveEmail
         );
         return ResponseEntity.ok().build();

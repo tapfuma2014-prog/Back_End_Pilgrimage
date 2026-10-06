@@ -81,7 +81,7 @@ public class AuctionCloseServiceImpl implements AuctionCloseService {
         Set<String> artworkIds = resolveArtworkIds(auctionId, stringValue(auction.get("featured_artworks")));
 
         jdbcTemplate.update(
-            "UPDATE auction SET status = 'completed', updated_date = NOW() WHERE id = ?",
+            "UPDATE auction SET status = 'completed', updated_date = NOW(), updated_by = 'system' WHERE id = ?",
             auctionId
         );
         log.info("Closed auction {} ({})", auctionId, auctionTitle);
@@ -186,8 +186,8 @@ public class AuctionCloseServiceImpl implements AuctionCloseService {
             """
             INSERT INTO auction_winner (
                 id, auction_id, artwork_id, winner_id, winning_bid_amount,
-                payment_status, created_by, created_date, updated_date
-            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW())
+                payment_status, created_by, updated_by, created_date, updated_date
+            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, 'system', NOW(), NOW())
             """,
             winnerRecordId,
             auctionId,
